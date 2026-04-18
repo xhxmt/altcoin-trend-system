@@ -10,6 +10,10 @@ class TokenBucket:
     _updated_at: float = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.capacity <= 0:
+            raise ValueError("capacity must be > 0")
+        if self.refill_per_second < 0:
+            raise ValueError("refill_per_second must be >= 0")
         self.available = self.capacity
         self._updated_at = time.monotonic()
 
@@ -20,6 +24,8 @@ class TokenBucket:
         self.available = min(self.capacity, self.available + elapsed * self.refill_per_second)
 
     def try_acquire(self, weight: float = 1) -> bool:
+        if weight <= 0:
+            raise ValueError("weight must be > 0")
         self._refill()
         if weight > self.available:
             return False

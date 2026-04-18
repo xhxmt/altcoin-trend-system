@@ -28,6 +28,31 @@ def test_binance_exchange_info_parser_returns_usdt_perp_instrument():
     assert instrument.min_notional == 5.0
 
 
+def test_binance_exchange_info_parser_skips_nonfinite_numeric_values():
+    adapter = BinancePublicAdapter()
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": "SOLUSDT",
+                "pair": "SOLUSDT",
+                "contractType": "PERPETUAL",
+                "status": "TRADING",
+                "baseAsset": "SOL",
+                "quoteAsset": "USDT",
+                "onboardDate": 1710000000000,
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "NaN"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ],
+            }
+        ]
+    }
+
+    assert adapter.parse_exchange_info(payload) == []
+
+
 def test_binance_exchange_info_parser_returns_empty_list_for_malformed_payload():
     adapter = BinancePublicAdapter()
 
@@ -109,6 +134,31 @@ def test_binance_exchange_info_parser_skips_non_dict_filter_entries():
     assert instrument.min_notional == 5.0
 
 
+def test_binance_exchange_info_parser_skips_non_string_symbol_fields():
+    adapter = BinancePublicAdapter()
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": "",
+                "pair": "SOLUSDT",
+                "contractType": "PERPETUAL",
+                "status": "TRADING",
+                "baseAsset": "SOL",
+                "quoteAsset": "USDT",
+                "onboardDate": 1710000000000,
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.0100"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ],
+            }
+        ]
+    }
+
+    assert adapter.parse_exchange_info(payload) == []
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 
@@ -123,12 +173,38 @@ def test_binance_kline_ws_parser_returns_closed_bar():
     assert bar.is_closed is True
 
 
+def test_binance_kline_ws_parser_rejects_non_bool_close_flag():
+    adapter = BinancePublicAdapter()
+
+    base_payload = {
+        "data": {
+            "k": {
+                "s": "SOLUSDT",
+                "t": 1710000000000,
+                "o": "100.0",
+                "h": "102.0",
+                "l": "99.5",
+                "c": "101.0",
+                "v": "1234.5",
+                "q": "124000.5",
+                "x": True,
+            }
+        }
+    }
+
+    for bad_close in ("false", 0, None):
+        payload = json.loads(json.dumps(base_payload))
+        payload["data"]["k"]["x"] = bad_close
+        assert adapter.parse_kline_message(payload) is None
+
+
 def test_binance_kline_ws_parser_returns_none_for_malformed_payload():
     adapter = BinancePublicAdapter()
 
     assert adapter.parse_kline_message({"data": []}) is None
     assert adapter.parse_kline_message({"data": "not-a-dict"}) is None
     assert adapter.parse_kline_message("not-a-mapping") is None
+    assert adapter.parse_kline_message(load_json("binance_kline_ws.json"), symbol="") is None
 
 
 def test_binance_kline_ws_parser_returns_none_for_missing_required_fields():
@@ -160,6 +236,28 @@ def test_binance_kline_ws_parser_returns_none_for_bad_scalar_values():
     assert adapter.parse_kline_message(payload) is None
 
 
+def test_binance_kline_ws_parser_rejects_nonfinite_numeric_values():
+    adapter = BinancePublicAdapter()
+
+    payload = {
+        "data": {
+            "k": {
+                "s": "SOLUSDT",
+                "t": 1710000000000,
+                "o": "100.0",
+                "h": "Infinity",
+                "l": "99.5",
+                "c": "101.0",
+                "v": "1234.5",
+                "q": "124000.5",
+                "x": True,
+            }
+        }
+    }
+
+    assert adapter.parse_kline_message(payload) is None
+
+
 def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     adapter = BybitPublicAdapter()
 
@@ -172,6 +270,54 @@ def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     assert instrument.contract_type == "LinearPerpetual"
     assert instrument.tick_size == 0.01
     assert instrument.step_size == 0.1
+
+
+def test_bybit_instruments_parser_skips_nonfinite_numeric_values():
+    adapter = BybitPublicAdapter()
+
+    payload = {
+        "retCode": 0,
+        "result": {
+            "list": [
+                {
+                    "symbol": "SOLUSDT",
+                    "status": "Trading",
+                    "baseCoin": "SOL",
+                    "quoteCoin": "USDT",
+                    "launchTime": "1710000000000",
+                    "contractType": "LinearPerpetual",
+                    "priceFilter": {"tickSize": "Infinity"},
+                    "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                }
+            ]
+        },
+    }
+
+    assert adapter.parse_instruments_info(payload) == []
+
+
+def test_bybit_instruments_parser_skips_non_string_symbol_fields():
+    adapter = BybitPublicAdapter()
+
+    payload = {
+        "retCode": 0,
+        "result": {
+            "list": [
+                {
+                    "symbol": "",
+                    "status": "Trading",
+                    "baseCoin": "SOL",
+                    "quoteCoin": "USDT",
+                    "launchTime": "1710000000000",
+                    "contractType": "LinearPerpetual",
+                    "priceFilter": {"tickSize": "0.01"},
+                    "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                }
+            ]
+        },
+    }
+
+    assert adapter.parse_instruments_info(payload) == []
 
 
 def test_bybit_instruments_parser_returns_empty_list_for_malformed_payload():
@@ -232,11 +378,60 @@ def test_bybit_kline_ws_parser_returns_closed_bar():
     assert bar.is_closed is True
 
 
+def test_bybit_kline_ws_parser_rejects_non_bool_close_flag():
+    adapter = BybitPublicAdapter()
+
+    base_payload = {
+        "topic": "kline.1.SOLUSDT",
+        "data": [
+            {
+                "start": 1710000000000,
+                "open": "100.0",
+                "high": "102.0",
+                "low": "99.5",
+                "close": "101.0",
+                "volume": "1234.5",
+                "turnover": "124000.5",
+                "confirm": True,
+            }
+        ],
+    }
+
+    for bad_close in ("false", 0, None):
+        payload = json.loads(json.dumps(base_payload))
+        payload["data"][0]["confirm"] = bad_close
+        assert adapter.parse_kline_message(payload) is None
+
+
 def test_bybit_kline_ws_parser_returns_none_without_topic_symbol():
     adapter = BybitPublicAdapter()
 
     assert adapter.parse_kline_message({"data": [{"start": 1710000000000}]}) is None
     assert adapter.parse_kline_message("not-a-mapping") is None
+
+
+def test_bybit_kline_ws_parser_rejects_malformed_topic_or_symbol():
+    adapter = BybitPublicAdapter()
+
+    payload = {
+        "topic": "kline.1.SOLUSDT",
+        "data": [
+            {
+                "start": 1710000000000,
+                "open": "100.0",
+                "high": "102.0",
+                "low": "99.5",
+                "close": "101.0",
+                "volume": "1234.5",
+                "turnover": "124000.5",
+                "confirm": True,
+            }
+        ],
+    }
+
+    assert adapter.parse_kline_message(payload, symbol="") is None
+    assert adapter.parse_kline_message({**payload, "topic": "bad.topic"}) is None
+    assert adapter.parse_kline_message({**payload, "topic": "kline.1."}) is None
 
 
 def test_bybit_kline_ws_parser_returns_none_for_missing_required_fields():

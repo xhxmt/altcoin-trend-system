@@ -1,4 +1,19 @@
+import math
+
 from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
+
+
+def _nonempty_str(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _finite_float(value: object) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("value must be finite")
+    return number
 
 
 def _filter_value(filters: list[dict], filter_type: str, key: str) -> float | None:
@@ -6,7 +21,7 @@ def _filter_value(filters: list[dict], filter_type: str, key: str) -> float | No
         if not isinstance(item, dict):
             continue
         if item.get("filterType") == filter_type and key in item:
-            return float(item[key])
+            return _finite_float(item[key])
     return None
 
 
@@ -31,7 +46,7 @@ class BinancePublicAdapter:
             if not isinstance(item, dict):
                 continue
             required_fields = ("symbol", "baseAsset", "quoteAsset", "status", "contractType")
-            if any(not isinstance(item.get(field), str) for field in required_fields):
+            if any(_nonempty_str(item.get(field)) is None for field in required_fields):
                 continue
             if item["quoteAsset"] != "USDT" or item["contractType"] != "PERPETUAL":
                 continue
@@ -40,9 +55,9 @@ class BinancePublicAdapter:
                     Instrument(
                         exchange=self.exchange,
                         market_type=self.market_type,
-                        symbol=item["symbol"],
-                        base_asset=item["baseAsset"],
-                        quote_asset=item["quoteAsset"],
+                        symbol=_nonempty_str(item["symbol"]) or "",
+                        base_asset=_nonempty_str(item["baseAsset"]) or "",
+                        quote_asset=_nonempty_str(item["quoteAsset"]) or "",
                         status=item["status"].lower(),
                         onboard_at=utc_from_ms(int(item["onboardDate"])) if item.get("onboardDate") else None,
                         contract_type=item.get("contractType"),
@@ -58,6 +73,8 @@ class BinancePublicAdapter:
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:
         if not isinstance(payload, dict):
             return None
+        if symbol is not None and _nonempty_str(symbol) is None:
+            return None
         data = payload.get("data", payload)
         if not isinstance(data, dict):
             return None
@@ -67,21 +84,23 @@ class BinancePublicAdapter:
         required_fields = ("s", "t", "o", "h", "l", "c", "v", "q", "x")
         if any(field not in kline for field in required_fields):
             return None
+        if _nonempty_str(kline.get("s")) is None or not isinstance(kline.get("x"), bool):
+            return None
         try:
             return MarketBar1m(
                 exchange=self.exchange,
-                symbol=kline["s"],
+                symbol=_nonempty_str(kline["s"]) or "",
                 ts=utc_from_ms(int(kline["t"])),
-                open=float(kline["o"]),
-                high=float(kline["h"]),
-                low=float(kline["l"]),
-                close=float(kline["c"]),
-                volume=float(kline["v"]),
-                quote_volume=float(kline["q"]),
+                open=_finite_float(kline["o"]),
+                high=_finite_float(kline["h"]),
+                low=_finite_float(kline["l"]),
+                close=_finite_float(kline["c"]),
+                volume=_finite_float(kline["v"]),
+                quote_volume=_finite_float(kline["q"]),
                 trade_count=int(kline["n"]) if kline.get("n") is not None else None,
-                taker_buy_base=float(kline["V"]) if kline.get("V") is not None else None,
-                taker_buy_quote=float(kline["Q"]) if kline.get("Q") is not None else None,
-                is_closed=bool(kline.get("x")),
+                taker_buy_base=_finite_float(kline["V"]) if kline.get("V") is not None else None,
+                taker_buy_quote=_finite_float(kline["Q"]) if kline.get("Q") is not None else None,
+                is_closed=kline["x"],
             )
         except (TypeError, ValueError, KeyError):
             return None

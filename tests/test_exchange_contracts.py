@@ -28,6 +28,55 @@ def test_binance_exchange_info_parser_returns_usdt_perp_instrument():
     assert instrument.min_notional == 5.0
 
 
+def test_binance_exchange_info_parser_returns_empty_list_for_malformed_payload():
+    adapter = BinancePublicAdapter()
+
+    assert adapter.parse_exchange_info("not-a-mapping") == []
+    assert adapter.parse_exchange_info({"symbols": "not-a-list"}) == []
+
+
+def test_binance_exchange_info_parser_skips_bad_rows():
+    adapter = BinancePublicAdapter()
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": "SOLUSDT",
+                "pair": "SOLUSDT",
+                "contractType": "PERPETUAL",
+                "status": "TRADING",
+                "baseAsset": "SOL",
+                "quoteAsset": "USDT",
+                "onboardDate": 1710000000000,
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.0100"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ],
+            },
+            {
+                "symbol": "SOLUSDT",
+                "pair": "SOLUSDT",
+                "contractType": "PERPETUAL",
+                "status": "TRADING",
+                "baseAsset": "SOL",
+                "quoteAsset": "USDT",
+                "onboardDate": "bad",
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.0100"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ],
+            },
+        ]
+    }
+
+    instruments = adapter.parse_exchange_info(payload)
+
+    assert len(instruments) == 1
+    assert instruments[0].symbol == "SOLUSDT"
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 
@@ -91,6 +140,51 @@ def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     assert instrument.contract_type == "LinearPerpetual"
     assert instrument.tick_size == 0.01
     assert instrument.step_size == 0.1
+
+
+def test_bybit_instruments_parser_returns_empty_list_for_malformed_payload():
+    adapter = BybitPublicAdapter()
+
+    assert adapter.parse_instruments_info("not-a-mapping") == []
+    assert adapter.parse_instruments_info({"result": "not-a-mapping"}) == []
+    assert adapter.parse_instruments_info({"result": {"list": "not-a-list"}}) == []
+
+
+def test_bybit_instruments_parser_skips_bad_rows():
+    adapter = BybitPublicAdapter()
+
+    payload = {
+        "retCode": 0,
+        "result": {
+            "list": [
+                {
+                    "symbol": "SOLUSDT",
+                    "status": "Trading",
+                    "baseCoin": "SOL",
+                    "quoteCoin": "USDT",
+                    "launchTime": "1710000000000",
+                    "contractType": "LinearPerpetual",
+                    "priceFilter": {"tickSize": "0.01"},
+                    "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                },
+                {
+                    "symbol": "SOLUSDT",
+                    "status": "Trading",
+                    "baseCoin": "SOL",
+                    "quoteCoin": "USDT",
+                    "launchTime": "bad",
+                    "contractType": "LinearPerpetual",
+                    "priceFilter": {"tickSize": "0.01"},
+                    "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                },
+            ]
+        },
+    }
+
+    instruments = adapter.parse_instruments_info(payload)
+
+    assert len(instruments) == 1
+    assert instruments[0].symbol == "SOLUSDT"
 
 
 def test_bybit_kline_ws_parser_returns_closed_bar():

@@ -19,25 +19,38 @@ class BinancePublicAdapter:
         raise NotImplementedError("BinancePublicAdapter does not implement live kline fetching")
 
     def parse_exchange_info(self, payload: dict) -> list[Instrument]:
+        if not isinstance(payload, dict):
+            return []
+        symbols = payload.get("symbols", [])
+        if not isinstance(symbols, list):
+            return []
         instruments: list[Instrument] = []
-        for item in payload.get("symbols", []):
-            if item.get("quoteAsset") != "USDT" or item.get("contractType") != "PERPETUAL":
+        for item in symbols:
+            if not isinstance(item, dict):
                 continue
-            instruments.append(
-                Instrument(
-                    exchange=self.exchange,
-                    market_type=self.market_type,
-                    symbol=item["symbol"],
-                    base_asset=item["baseAsset"],
-                    quote_asset=item["quoteAsset"],
-                    status=item["status"].lower(),
-                    onboard_at=utc_from_ms(int(item["onboardDate"])) if item.get("onboardDate") else None,
-                    contract_type=item.get("contractType"),
-                    tick_size=_filter_value(item.get("filters", []), "PRICE_FILTER", "tickSize"),
-                    step_size=_filter_value(item.get("filters", []), "LOT_SIZE", "stepSize"),
-                    min_notional=_filter_value(item.get("filters", []), "MIN_NOTIONAL", "notional"),
+            required_fields = ("symbol", "baseAsset", "quoteAsset", "status", "contractType")
+            if any(not isinstance(item.get(field), str) for field in required_fields):
+                continue
+            if item["quoteAsset"] != "USDT" or item["contractType"] != "PERPETUAL":
+                continue
+            try:
+                instruments.append(
+                    Instrument(
+                        exchange=self.exchange,
+                        market_type=self.market_type,
+                        symbol=item["symbol"],
+                        base_asset=item["baseAsset"],
+                        quote_asset=item["quoteAsset"],
+                        status=item["status"].lower(),
+                        onboard_at=utc_from_ms(int(item["onboardDate"])) if item.get("onboardDate") else None,
+                        contract_type=item.get("contractType"),
+                        tick_size=_filter_value(item.get("filters", []), "PRICE_FILTER", "tickSize"),
+                        step_size=_filter_value(item.get("filters", []), "LOT_SIZE", "stepSize"),
+                        min_notional=_filter_value(item.get("filters", []), "MIN_NOTIONAL", "notional"),
+                    )
                 )
-            )
+            except (TypeError, ValueError, KeyError):
+                continue
         return instruments
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:

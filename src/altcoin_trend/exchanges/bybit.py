@@ -12,27 +12,45 @@ class BybitPublicAdapter:
         raise NotImplementedError("BybitPublicAdapter does not implement live kline fetching")
 
     def parse_instruments_info(self, payload: dict) -> list[Instrument]:
+        if not isinstance(payload, dict):
+            return []
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return []
+        items = result.get("list", [])
+        if not isinstance(items, list):
+            return []
         instruments: list[Instrument] = []
-        for item in payload.get("result", {}).get("list", []):
-            if item.get("quoteCoin") != "USDT" or item.get("contractType") != "LinearPerpetual":
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            required_fields = ("symbol", "baseCoin", "quoteCoin", "status", "contractType")
+            if any(not isinstance(item.get(field), str) for field in required_fields):
+                continue
+            if item["quoteCoin"] != "USDT" or item["contractType"] != "LinearPerpetual":
                 continue
             price_filter = item.get("priceFilter", {})
             lot_filter = item.get("lotSizeFilter", {})
-            instruments.append(
-                Instrument(
-                    exchange=self.exchange,
-                    market_type=self.market_type,
-                    symbol=item["symbol"],
-                    base_asset=item["baseCoin"],
-                    quote_asset=item["quoteCoin"],
-                    status=item["status"].lower(),
-                    onboard_at=utc_from_ms(int(item["launchTime"])) if item.get("launchTime") else None,
-                    contract_type=item.get("contractType"),
-                    tick_size=float(price_filter["tickSize"]) if price_filter.get("tickSize") else None,
-                    step_size=float(lot_filter["qtyStep"]) if lot_filter.get("qtyStep") else None,
-                    min_notional=float(lot_filter["minNotionalValue"]) if lot_filter.get("minNotionalValue") else None,
+            if not isinstance(price_filter, dict) or not isinstance(lot_filter, dict):
+                continue
+            try:
+                instruments.append(
+                    Instrument(
+                        exchange=self.exchange,
+                        market_type=self.market_type,
+                        symbol=item["symbol"],
+                        base_asset=item["baseCoin"],
+                        quote_asset=item["quoteCoin"],
+                        status=item["status"].lower(),
+                        onboard_at=utc_from_ms(int(item["launchTime"])) if item.get("launchTime") else None,
+                        contract_type=item.get("contractType"),
+                        tick_size=float(price_filter["tickSize"]) if price_filter.get("tickSize") else None,
+                        step_size=float(lot_filter["qtyStep"]) if lot_filter.get("qtyStep") else None,
+                        min_notional=float(lot_filter["minNotionalValue"]) if lot_filter.get("minNotionalValue") else None,
+                    )
                 )
-            )
+            except (TypeError, ValueError, KeyError):
+                continue
         return instruments
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:

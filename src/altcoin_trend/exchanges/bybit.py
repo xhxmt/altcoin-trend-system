@@ -37,7 +37,7 @@ class BybitPublicAdapter:
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:
         rows = payload.get("data") or []
-        if not rows:
+        if not isinstance(rows, list) or not rows:
             return None
         row = rows[0]
         topic = payload.get("topic")
@@ -47,6 +47,9 @@ class BybitPublicAdapter:
             if parts and parts[-1]:
                 topic_symbol = parts[-1]
         if topic_symbol is None:
+            return None
+        required_fields = ("start", "open", "high", "low", "close", "volume", "turnover", "confirm")
+        if not isinstance(row, dict) or any(field not in row for field in required_fields):
             return None
         return MarketBar1m(
             exchange=self.exchange,

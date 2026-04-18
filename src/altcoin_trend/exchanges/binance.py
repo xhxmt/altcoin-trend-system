@@ -47,6 +47,9 @@ class BinancePublicAdapter:
         kline = data.get("k")
         if not isinstance(kline, dict) or not kline:
             return None
+        required_fields = ("s", "t", "o", "h", "l", "c", "v", "q", "x")
+        if any(field not in kline for field in required_fields):
+            return None
         return MarketBar1m(
             exchange=self.exchange,
             symbol=kline["s"],

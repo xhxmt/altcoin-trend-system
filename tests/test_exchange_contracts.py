@@ -49,6 +49,13 @@ def test_binance_kline_ws_parser_returns_none_for_malformed_payload():
     assert adapter.parse_kline_message({"data": "not-a-dict"}) is None
 
 
+def test_binance_kline_ws_parser_returns_none_for_missing_required_fields():
+    adapter = BinancePublicAdapter()
+
+    assert adapter.parse_kline_message({"data": {"k": {"o": "100.0", "t": 1710000000000}}}) is None
+    assert adapter.parse_kline_message({"data": {"k": {"s": "SOLUSDT", "t": 1710000000000}}}) is None
+
+
 def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     adapter = BybitPublicAdapter()
 
@@ -80,3 +87,10 @@ def test_bybit_kline_ws_parser_returns_none_without_topic_symbol():
     adapter = BybitPublicAdapter()
 
     assert adapter.parse_kline_message({"data": [{"start": 1710000000000}]}) is None
+
+
+def test_bybit_kline_ws_parser_returns_none_for_missing_required_fields():
+    adapter = BybitPublicAdapter()
+
+    assert adapter.parse_kline_message({"topic": "kline.1.SOLUSDT", "data": [{}]}) is None
+    assert adapter.parse_kline_message({"topic": "kline.1.SOLUSDT", "data": {"start": 1710000000000}}) is None

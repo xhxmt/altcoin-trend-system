@@ -1,5 +1,8 @@
 import typer
 
+from altcoin_trend.config import load_settings
+from altcoin_trend.db import build_engine, run_all_migrations
+
 app = typer.Typer(help="Altcoin trend system CLI")
 
 
@@ -10,7 +13,10 @@ def main() -> None:
 
 @app.command("init-db")
 def init_db() -> None:
-    typer.echo("Database initialization is wired in Task 2")
+    settings = load_settings()
+    engine = build_engine(settings)
+    run_all_migrations(engine)
+    typer.echo("Initialized altcoin trend database schema")
 
 
 @app.command("bootstrap")

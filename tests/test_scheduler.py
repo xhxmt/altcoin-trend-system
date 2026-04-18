@@ -72,6 +72,40 @@ def test_build_snapshot_rows_scores_and_ranks_latest_market_data():
     assert rank_rows[0]["rank"] == 1
 
 
+def test_build_snapshot_rows_includes_higher_timeframe_features():
+    snapshot_ts = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "base_asset": "SOL",
+                "ts": pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(minutes=minute),
+                "open": 100.0 + minute * 0.01,
+                "high": 101.0 + minute * 0.01,
+                "low": 99.0 + minute * 0.01,
+                "close": 100.5 + minute * 0.01,
+                "volume": 10.0 + minute % 5,
+                "quote_volume": 1000.0 + minute * 2,
+            }
+            for minute in range(24 * 60)
+        ]
+    )
+
+    feature_rows, _ = build_snapshot_rows(market_rows, snapshot_ts)
+
+    row = feature_rows[0]
+    assert row["ema20_4h"] is not None
+    assert row["ema60_4h"] is not None
+    assert row["ema20_1d"] is not None
+    assert row["ema60_1d"] is not None
+    assert row["atr14_4h"] > 0
+    assert row["adx14_4h"] >= 0
+    assert row["volume_ratio_4h"] > 0
+    assert isinstance(row["breakout_20d"], bool)
+
+
 def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
     calls = []
 

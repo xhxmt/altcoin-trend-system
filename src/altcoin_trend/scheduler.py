@@ -9,7 +9,8 @@ import pandas as pd
 from sqlalchemy import Engine, text
 
 from altcoin_trend.db import insert_rows
-from altcoin_trend.features.indicators import add_ema
+from altcoin_trend.features.indicators import add_ema, adx, atr
+from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.features.scoring import ScoreInput, compute_final_score
 from altcoin_trend.signals.ranking import rank_scores
 
@@ -45,6 +46,67 @@ def _component_scores(group: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _frame_with_required_columns(group: pd.DataFrame) -> pd.DataFrame:
+    working = group.copy()
+    for column, default in (("trade_count", 0), ("volume", 0.0), ("quote_volume", 0.0)):
+        if column not in working.columns:
+            working[column] = default
+    return working
+
+
+def _latest_value(frame: pd.DataFrame, column: str) -> float | None:
+    if frame.empty or column not in frame.columns:
+        return None
+    value = frame[column].iloc[-1]
+    if pd.isna(value):
+        return None
+    return float(value)
+
+
+def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
+    working = _frame_with_required_columns(group)
+    features: dict[str, Any] = {
+        "ema20_4h": None,
+        "ema60_4h": None,
+        "ema20_1d": None,
+        "ema60_1d": None,
+        "adx14_4h": None,
+        "atr14_4h": None,
+        "volume_ratio_4h": None,
+        "breakout_20d": False,
+    }
+
+    bars_4h = resample_market_1m(working, "4h")
+    if not bars_4h.empty:
+        bars_4h = add_ema(bars_4h, column="close", span=20, output="ema20")
+        bars_4h = add_ema(bars_4h, column="close", span=60, output="ema60")
+        bars_4h["atr14"] = atr(bars_4h, window=14)
+        bars_4h["adx14"] = adx(bars_4h, window=14)
+        avg_volume_4h = float(bars_4h["volume"].tail(20).mean())
+        latest_volume_4h = float(bars_4h["volume"].iloc[-1])
+        features.update(
+            {
+                "ema20_4h": _latest_value(bars_4h, "ema20"),
+                "ema60_4h": _latest_value(bars_4h, "ema60"),
+                "atr14_4h": _latest_value(bars_4h, "atr14"),
+                "adx14_4h": _latest_value(bars_4h, "adx14"),
+                "volume_ratio_4h": latest_volume_4h / avg_volume_4h if avg_volume_4h > 0 else None,
+            }
+        )
+
+    bars_1d = resample_market_1m(working, "1d")
+    if not bars_1d.empty:
+        bars_1d = add_ema(bars_1d, column="close", span=20, output="ema20")
+        bars_1d = add_ema(bars_1d, column="close", span=60, output="ema60")
+        features["ema20_1d"] = _latest_value(bars_1d, "ema20")
+        features["ema60_1d"] = _latest_value(bars_1d, "ema60")
+        if len(bars_1d) > 20:
+            previous_high = float(bars_1d["high"].iloc[-21:-1].max())
+            features["breakout_20d"] = float(bars_1d["close"].iloc[-1]) > previous_high
+
+    return features
+
+
 def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if market_rows.empty:
         return [], []
@@ -57,6 +119,7 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
         group = add_ema(group, column="close", span=20, output="ema20_1m")
         latest = group.iloc[-1]
         scores = _component_scores(group)
+        timeframe_features = _higher_timeframe_features(group)
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
         feature_rows.append(
             {
@@ -67,6 +130,7 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "base_asset": latest["base_asset"],
                 "close": float(latest["close"]),
                 "ema20_1m": float(latest["ema20_1m"]),
+                **timeframe_features,
                 "trend_score": scores["trend_score"],
                 "volume_breakout_score": scores["volume_breakout_score"],
                 "relative_strength_score": scores["relative_strength_score"],

@@ -8,4 +8,4 @@ def test_altcoin_trend_service_contains_expected_runtime_lines():
     assert "WorkingDirectory=/home/tfisher/altcoin-trend-system" in contents
     assert "EnvironmentFile=%h/.config/acts/acts.env" in contents
     assert "Environment=PYTHONPATH=/home/tfisher/altcoin-trend-system/src" in contents
-    assert "ExecStart=/tmp/acts-venv/bin/python -m altcoin_trend.daemon" in contents
+    assert "ExecStart=/home/tfisher/altcoin-trend-system/.venv/bin/python -m altcoin_trend.daemon" in contents

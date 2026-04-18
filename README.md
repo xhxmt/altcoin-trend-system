@@ -33,4 +33,8 @@ cp systemd/user/altcoin-trend.service ~/.config/systemd/user/altcoin-trend.servi
 systemctl --user daemon-reload
 systemctl --user enable --now altcoin-trend
 systemctl --user status altcoin-trend --no-pager
+journalctl --user -u altcoin-trend -f
 ```
+
+The unit runs this checkout's `.venv` interpreter, so keep the repository in
+place and refresh the virtual environment there before enabling the service.

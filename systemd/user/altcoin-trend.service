@@ -7,7 +7,7 @@ Type=simple
 WorkingDirectory=/home/tfisher/altcoin-trend-system
 EnvironmentFile=%h/.config/acts/acts.env
 Environment=PYTHONPATH=/home/tfisher/altcoin-trend-system/src
-ExecStart=/tmp/acts-venv/bin/python -m altcoin_trend.daemon
+ExecStart=/home/tfisher/altcoin-trend-system/.venv/bin/python -m altcoin_trend.daemon
 Restart=always
 RestartSec=10
 

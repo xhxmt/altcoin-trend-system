@@ -22,15 +22,32 @@ def test_cli_help_lists_mvp_commands():
 
 
 def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
+    calls = []
     monkeypatch.setattr(
         "altcoin_trend.cli.load_settings",
         lambda: AppSettings(default_exchanges="binance,bybit", quote_asset="USDT"),
     )
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+
+    def fake_bootstrap_exchange(adapter, engine, settings, lookback_days, now):
+        calls.append((adapter.exchange, lookback_days))
+
+        class Result:
+            exchange = adapter.exchange
+            instruments_selected = 2
+            bars_written = 3
+
+        return Result()
+
+    monkeypatch.setattr("altcoin_trend.cli.bootstrap_exchange", fake_bootstrap_exchange)
 
     result = CliRunner().invoke(app, ["bootstrap", "--lookback-days", "30"])
 
     assert result.exit_code == 0
-    assert "Bootstrap requested lookback_days=30 exchanges=binance,bybit quote=USDT" in result.output
+    assert calls == [("binance", 30), ("bybit", 30)]
+    assert "Bootstrap binance instruments=2 bars_written=3" in result.output
+    assert "Bootstrap bybit instruments=2 bars_written=3" in result.output
+    assert "Bootstrap completed exchanges=2 bars_written=6" in result.output
 
 
 def test_cli_explain_uses_requested_exchange_and_symbol():

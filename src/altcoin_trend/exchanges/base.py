@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from altcoin_trend.models import MarketBar1m
+from altcoin_trend.models import Instrument, MarketBar1m
 
 
 class ExchangeAdapter(Protocol):
@@ -10,6 +10,9 @@ class ExchangeAdapter(Protocol):
         ...
 
     def list_usdt_perp_symbols(self) -> list[str]:
+        ...
+
+    def fetch_instruments(self) -> list[Instrument]:
         ...
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:

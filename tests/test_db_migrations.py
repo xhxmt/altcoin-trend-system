@@ -1,4 +1,5 @@
 import altcoin_trend.db as db
+from altcoin_trend.models import Instrument
 
 
 class _FakeResource:
@@ -51,6 +52,7 @@ class _InsertFakeConnection:
 
     def execute(self, statement, rows):
         self.statements.append((str(statement), list(rows)))
+        return _FakeResult([{"symbol": row["symbol"], "asset_id": index + 100} for index, row in enumerate(rows)])
 
 
 class _InsertFakeBegin:
@@ -70,6 +72,14 @@ class _InsertFakeEngine:
 
     def begin(self):
         return _InsertFakeBegin(self.statements)
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return list(self._rows)
 
 
 def test_run_all_migrations_executes_packaged_sql_in_sorted_order(monkeypatch):
@@ -144,3 +154,36 @@ def test_insert_rows_rejects_invalid_table_name():
         assert "Invalid table name" in str(exc)
     else:
         raise AssertionError("ValueError not raised")
+
+
+def test_upsert_instruments_returns_asset_ids_and_records_statement():
+    engine = _InsertFakeEngine()
+    instrument = Instrument(
+        exchange="binance",
+        market_type="usdt_perp",
+        symbol="SOLUSDT",
+        base_asset="SOL",
+        quote_asset="USDT",
+        status="trading",
+        onboard_at=None,
+        contract_type="PERPETUAL",
+        tick_size=0.01,
+        step_size=0.1,
+        min_notional=5.0,
+    )
+
+    asset_ids = db.upsert_instruments(engine, [instrument])
+
+    assert asset_ids == {"SOLUSDT": 100}
+    statement, rows = engine.statements[0]
+    assert "INSERT INTO alt_core.asset_master" in statement
+    assert "ON CONFLICT (exchange, market_type, symbol)" in statement
+    assert "RETURNING symbol, asset_id" in statement
+    assert rows[0]["symbol"] == "SOLUSDT"
+
+
+def test_upsert_instruments_returns_empty_mapping_for_empty_input():
+    engine = _InsertFakeEngine()
+
+    assert db.upsert_instruments(engine, []) == {}
+    assert engine.statements == []

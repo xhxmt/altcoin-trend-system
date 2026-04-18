@@ -24,6 +24,9 @@ class BybitPublicAdapter:
     base_url = "https://api.bybit.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
+        return [instrument.symbol for instrument in self.fetch_instruments()]
+
+    def fetch_instruments(self) -> list[Instrument]:
         instruments: list[Instrument] = []
         cursor: str | None = None
         while True:
@@ -47,7 +50,7 @@ class BybitPublicAdapter:
             if not isinstance(next_cursor, str) or not next_cursor.strip():
                 break
             cursor = next_cursor
-        return [instrument.symbol for instrument in instruments]
+        return instruments
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
         response = httpx.get(

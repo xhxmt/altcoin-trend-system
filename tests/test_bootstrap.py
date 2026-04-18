@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 from altcoin_trend.config import AppSettings
+from altcoin_trend.ingest import bootstrap as bootstrap_module
+from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import filter_instruments
@@ -115,6 +117,78 @@ def test_market_bar_to_row_normalizes_expected_fields():
         "data_status": "healthy",
         "reason_codes": [],
     }
+
+
+class _FakeBootstrapAdapter:
+    exchange = "binance"
+
+    def __init__(self):
+        self.fetch_calls = []
+
+    def fetch_instruments(self):
+        return [
+            make_instrument("SOLUSDT", onboard_at=NOW - timedelta(days=365)),
+            make_instrument("NEWUSDT", onboard_at=NOW - timedelta(days=1)),
+        ]
+
+    def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int):
+        self.fetch_calls.append((symbol, start_ms, end_ms))
+        return [
+            MarketBar1m(
+                exchange="binance",
+                symbol=symbol,
+                ts=NOW - timedelta(minutes=1),
+                open=100.0,
+                high=102.0,
+                low=99.5,
+                close=101.0,
+                volume=1234.5,
+                quote_volume=124000.5,
+                trade_count=222,
+                taker_buy_base=600.0,
+                taker_buy_quote=60600.0,
+                is_closed=True,
+            )
+        ]
+
+
+def test_bootstrap_exchange_filters_fetches_and_writes_market_rows(monkeypatch):
+    adapter = _FakeBootstrapAdapter()
+    inserted = []
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "upsert_instruments",
+        lambda engine, instruments: {instrument.symbol: index + 10 for index, instrument in enumerate(instruments)},
+    )
+
+    def fake_insert_rows(engine, table_name, rows):
+        inserted.append((table_name, list(rows)))
+        return len(inserted[-1][1])
+
+    monkeypatch.setattr(bootstrap_module, "insert_rows", fake_insert_rows)
+
+    result = bootstrap_exchange(
+        adapter=adapter,
+        engine=object(),
+        settings=AppSettings(min_listing_days=60),
+        lookback_days=2,
+        now=NOW,
+    )
+
+    assert result.exchange == "binance"
+    assert result.instruments_selected == 1
+    assert result.bars_written == 1
+    assert adapter.fetch_calls == [
+        (
+            "SOLUSDT",
+            int((NOW - timedelta(days=2)).timestamp() * 1000),
+            int(NOW.timestamp() * 1000),
+        )
+    ]
+    assert inserted[0][0] == "alt_core.market_1m"
+    assert inserted[0][1][0]["asset_id"] == 10
+    assert inserted[0][1][0]["symbol"] == "SOLUSDT"
 
 
 def test_binance_parse_rest_klines_converts_row():

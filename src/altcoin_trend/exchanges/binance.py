@@ -33,12 +33,15 @@ class BinancePublicAdapter:
     base_url = "https://fapi.binance.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
+        return [instrument.symbol for instrument in self.fetch_instruments()]
+
+    def fetch_instruments(self) -> list[Instrument]:
         response = httpx.get(f"{self.base_url}/fapi/v1/exchangeInfo", timeout=20)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("Malformed Binance exchange info response: payload must be a mapping")
-        return [instrument.symbol for instrument in self.parse_exchange_info(payload)]
+        return self.parse_exchange_info(payload)
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
         response = httpx.get(

@@ -6,6 +6,7 @@ from typing import Iterable
 from sqlalchemy import Engine, create_engine, text
 
 from altcoin_trend.config import AppSettings
+from altcoin_trend.models import Instrument
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,75 @@ def insert_rows(engine: Engine, table_name: str, rows: Iterable[dict]) -> int:
         connection.execute(statement, rows)
 
     return len(rows)
+
+
+def upsert_instruments(engine: Engine, instruments: Iterable[Instrument]) -> dict[str, int]:
+    rows = [
+        {
+            "exchange": instrument.exchange,
+            "market_type": instrument.market_type,
+            "symbol": instrument.symbol,
+            "base_asset": instrument.base_asset,
+            "quote_asset": instrument.quote_asset,
+            "status": instrument.status,
+            "onboard_at": instrument.onboard_at,
+            "contract_type": instrument.contract_type,
+            "tick_size": instrument.tick_size,
+            "step_size": instrument.step_size,
+            "min_notional": instrument.min_notional,
+        }
+        for instrument in instruments
+    ]
+    if not rows:
+        return {}
+
+    statement = text(
+        """
+        INSERT INTO alt_core.asset_master (
+            exchange,
+            market_type,
+            symbol,
+            base_asset,
+            quote_asset,
+            status,
+            onboard_at,
+            contract_type,
+            tick_size,
+            step_size,
+            min_notional
+        )
+        VALUES (
+            :exchange,
+            :market_type,
+            :symbol,
+            :base_asset,
+            :quote_asset,
+            :status,
+            :onboard_at,
+            :contract_type,
+            :tick_size,
+            :step_size,
+            :min_notional
+        )
+        ON CONFLICT (exchange, market_type, symbol)
+        DO UPDATE SET
+            base_asset = EXCLUDED.base_asset,
+            quote_asset = EXCLUDED.quote_asset,
+            status = EXCLUDED.status,
+            onboard_at = EXCLUDED.onboard_at,
+            contract_type = EXCLUDED.contract_type,
+            tick_size = EXCLUDED.tick_size,
+            step_size = EXCLUDED.step_size,
+            min_notional = EXCLUDED.min_notional,
+            updated_at = NOW()
+        RETURNING symbol, asset_id
+        """
+    )
+
+    with engine.begin() as connection:
+        result = connection.execute(statement, rows)
+        mappings = result.mappings() if hasattr(result, "mappings") else result
+        return {row["symbol"]: row["asset_id"] for row in mappings}
 
 
 def run_all_migrations(engine: Engine) -> None:

@@ -1,8 +1,13 @@
+from datetime import datetime, timezone
+
 import typer
 
 from altcoin_trend.config import load_settings
 from altcoin_trend.daemon import main as daemon_main
 from altcoin_trend.db import build_engine, run_all_migrations
+from altcoin_trend.exchanges.binance import BinancePublicAdapter
+from altcoin_trend.exchanges.bybit import BybitPublicAdapter
+from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.scheduler import run_once_pipeline
 
 app = typer.Typer(help="Altcoin trend system CLI")
@@ -24,10 +29,23 @@ def init_db() -> None:
 @app.command("bootstrap")
 def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -> None:
     settings = load_settings()
-    typer.echo(
-        f"Bootstrap requested lookback_days={lookback_days} "
-        f"exchanges={','.join(settings.exchanges)} quote={settings.quote_asset}"
-    )
+    engine = build_engine(settings)
+    now = datetime.now(timezone.utc)
+    total_bars = 0
+    for exchange in settings.exchanges:
+        if exchange == "binance":
+            adapter = BinancePublicAdapter()
+        elif exchange == "bybit":
+            adapter = BybitPublicAdapter()
+        else:
+            raise typer.BadParameter(f"Unsupported exchange: {exchange}")
+        result = bootstrap_exchange(adapter=adapter, engine=engine, settings=settings, lookback_days=lookback_days, now=now)
+        total_bars += result.bars_written
+        typer.echo(
+            f"Bootstrap {result.exchange} instruments={result.instruments_selected} "
+            f"bars_written={result.bars_written}"
+        )
+    typer.echo(f"Bootstrap completed exchanges={len(settings.exchanges)} bars_written={total_bars}")
 
 
 @app.command("run-once")

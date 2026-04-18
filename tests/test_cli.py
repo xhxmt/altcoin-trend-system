@@ -50,25 +50,67 @@ def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
     assert "Bootstrap completed exchanges=2 bars_written=6" in result.output
 
 
-def test_cli_explain_uses_requested_exchange_and_symbol():
+def test_cli_explain_uses_requested_exchange_and_symbol(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr("altcoin_trend.cli.load_explain_row", lambda engine, symbol, exchange: None)
+
     result = CliRunner().invoke(app, ["explain", "solusdt", "--exchange", "binance"])
 
     assert result.exit_code == 0
     assert "binance:SOLUSDT" in result.output
 
 
-def test_cli_rank_echoes_scope_and_limit():
+def test_cli_explain_prints_snapshot_when_available(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_explain_row",
+        lambda engine, symbol, exchange: {
+            "exchange": exchange,
+            "symbol": symbol.upper(),
+            "final_score": 88.4,
+            "tier": "strong",
+            "trend_score": 80.0,
+            "volume_breakout_score": 90.0,
+            "relative_strength_score": 50.0,
+            "derivatives_score": 50.0,
+            "quality_score": 100.0,
+            "veto_reason_codes": [],
+        },
+    )
+
+    result = CliRunner().invoke(app, ["explain", "solusdt", "--exchange", "binance"])
+
+    assert result.exit_code == 0
+    assert "binance:SOLUSDT" in result.output
+    assert "Score: 88.4" in result.output
+
+
+def test_cli_rank_echoes_scope_and_limit(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_rank_rows",
+        lambda engine, rank_scope, limit: [
+            {"rank": 1, "symbol": "SOLUSDT", "final_score": 88.4, "tier": "strong"}
+        ],
+    )
+
     result = CliRunner().invoke(app, ["rank", "--exchange", "bybit", "--limit", "5"])
 
     assert result.exit_code == 0
     assert "scope=bybit" in result.output
     assert "limit=5" in result.output
+    assert "1. SOLUSDT score=88.4 tier=strong" in result.output
 
 
 def test_cli_run_once_reports_pipeline_status(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
     monkeypatch.setattr(
         "altcoin_trend.cli.run_once_pipeline",
-        lambda: RunOnceResult(datetime(2024, 1, 1, tzinfo=timezone.utc), "healthy", "ok"),
+        lambda engine: RunOnceResult(datetime(2024, 1, 1, tzinfo=timezone.utc), "healthy", "ok"),
     )
 
     result = CliRunner().invoke(app, ["run-once"])

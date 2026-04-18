@@ -14,11 +14,13 @@ def test_daemon_runs_one_iteration_with_configured_sleep(monkeypatch):
     settings = AppSettings(signal_interval_seconds=17)
     pipeline_calls: list[int] = []
     sleep_calls: list[int] = []
+    engine = object()
 
     monkeypatch.setattr("altcoin_trend.daemon.load_settings", lambda: settings)
+    monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: engine)
     monkeypatch.setattr(
         "altcoin_trend.daemon.run_once_pipeline",
-        lambda: pipeline_calls.append(1) or SimpleNamespace(status="healthy", message="ok"),
+        lambda *, engine: pipeline_calls.append(id(engine)) or SimpleNamespace(status="healthy", message="ok"),
     )
 
     def fake_sleep(seconds: int) -> None:
@@ -30,5 +32,5 @@ def test_daemon_runs_one_iteration_with_configured_sleep(monkeypatch):
     with pytest.raises(StopLoop):
         daemon.main()
 
-    assert pipeline_calls == [1]
+    assert pipeline_calls == [id(engine)]
     assert sleep_calls == [17]

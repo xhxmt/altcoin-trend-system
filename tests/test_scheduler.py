@@ -1,9 +1,10 @@
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 
-from altcoin_trend.scheduler import RunOnceResult, run_once_pipeline
+from altcoin_trend.scheduler import RunOnceResult, build_snapshot_rows, run_once_pipeline
 
 
 def test_run_once_pipeline_defaults_to_degraded_when_no_step():
@@ -26,3 +27,72 @@ def test_run_once_result_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         result.status = "degraded"  # type: ignore[misc]
+
+
+def test_build_snapshot_rows_scores_and_ranks_latest_market_data():
+    snapshot_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "base_asset": "SOL",
+                "ts": "2026-01-01T00:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+            },
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "base_asset": "SOL",
+                "ts": "2026-01-01T00:01:00Z",
+                "open": 100.0,
+                "high": 103.0,
+                "low": 100.0,
+                "close": 102.0,
+                "volume": 20.0,
+                "quote_volume": 3000.0,
+            },
+        ]
+    )
+
+    feature_rows, rank_rows = build_snapshot_rows(market_rows, snapshot_ts)
+
+    assert len(feature_rows) == 1
+    assert feature_rows[0]["symbol"] == "SOLUSDT"
+    assert feature_rows[0]["ts"] == snapshot_ts
+    assert feature_rows[0]["final_score"] > 0
+    assert rank_rows[0]["rank_scope"] == "all"
+    assert rank_rows[0]["rank"] == 1
+
+
+def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr("altcoin_trend.scheduler.write_run_once_snapshots", lambda engine, snapshot_ts: (2, 4))
+
+    class Engine:
+        pass
+
+    result = run_once_pipeline(engine=Engine(), now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert result.status == "healthy"
+    assert result.message == "features_written=2 ranks_written=4"
+
+
+def test_run_once_pipeline_reports_degraded_when_no_market_rows(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.scheduler.write_run_once_snapshots", lambda engine, snapshot_ts: (0, 0))
+
+    class Engine:
+        pass
+
+    result = run_once_pipeline(engine=Engine(), now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert result.status == "degraded"
+    assert result.message == "no market rows available"

@@ -8,7 +8,8 @@ from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import bootstrap_exchange
-from altcoin_trend.scheduler import run_once_pipeline
+from altcoin_trend.scheduler import load_explain_row, load_rank_rows, run_once_pipeline
+from altcoin_trend.signals.explain import build_explain_text
 
 app = typer.Typer(help="Altcoin trend system CLI")
 
@@ -50,7 +51,9 @@ def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -
 
 @app.command("run-once")
 def run_once() -> None:
-    result = run_once_pipeline()
+    settings = load_settings()
+    engine = build_engine(settings)
+    result = run_once_pipeline(engine=engine)
     typer.echo(f"Run once status={result.status} message={result.message}")
 
 
@@ -65,7 +68,15 @@ def rank(
     exchange: str | None = typer.Option(None, "--exchange"),
 ) -> None:
     scope = exchange or "all"
-    typer.echo(f"Rank requested for scope={scope} limit={limit}")
+    settings = load_settings()
+    engine = build_engine(settings)
+    rows = load_rank_rows(engine, rank_scope=scope, limit=limit)
+    if not rows:
+        typer.echo(f"No rank snapshot found for scope={scope}")
+        return
+    typer.echo(f"Rank snapshot scope={scope} limit={limit}")
+    for row in rows:
+        typer.echo(f"{row['rank']}. {row['symbol']} score={row['final_score']} tier={row['tier']}")
 
 
 @app.command("status")
@@ -84,8 +95,14 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
 
 @app.command("explain")
 def explain(symbol: str, exchange: str = typer.Option(..., "--exchange")) -> None:
-    typer.echo(f"{exchange}:{symbol.upper()}")
-    typer.echo("Score: unavailable until feature snapshots exist")
+    settings = load_settings()
+    engine = build_engine(settings)
+    row = load_explain_row(engine, symbol=symbol, exchange=exchange)
+    if row is None:
+        typer.echo(f"{exchange}:{symbol.upper()}")
+        typer.echo("Score: unavailable until feature snapshots exist")
+        return
+    typer.echo(build_explain_text(row))
 
 
 if __name__ == "__main__":

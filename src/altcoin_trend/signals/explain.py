@@ -11,26 +11,25 @@ def _get(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
 
 
 def build_explain_text(row: Mapping[str, Any] | Any) -> str:
-    symbol = _get(row, "symbol", "UNKNOWN")
+    exchange = _get(row, "exchange", "unknown")
+    symbol = row["symbol"] if isinstance(row, Mapping) else getattr(row, "symbol")
     final_score = _get(row, "final_score", 0.0)
     tier = _get(row, "tier", "rejected")
-    primary_reason = _get(row, "primary_reason", "")
-    veto = tuple(_get(row, "veto", ()))
+    veto = tuple(_get(row, "veto_reason_codes", ()))
 
     lines = [
-        f"Symbol: {symbol}",
+        f"{exchange}:{symbol}",
         f"Score: {final_score}",
         f"Tier: {tier}",
-        f"Trend: {_get(row, 'trend', 'n/a')}",
-        f"Volume: {_get(row, 'volume', 'n/a')}",
-        f"Relative: {_get(row, 'relative', 'n/a')}",
-        f"Derivatives: {_get(row, 'derivatives', 'n/a')}",
-        f"Quality: {_get(row, 'quality', 'n/a')}",
+        "Breakdown:",
+        f"Trend: {_get(row, 'trend_score', 'n/a')}",
+        f"Volume breakout: {_get(row, 'volume_breakout_score', 'n/a')}",
+        f"Relative strength: {_get(row, 'relative_strength_score', 'n/a')}",
+        f"Derivatives: {_get(row, 'derivatives_score', 'n/a')}",
+        f"Quality: {_get(row, 'quality_score', 'n/a')}",
     ]
     if veto:
         lines.append(f"Veto: {', '.join(veto)}")
     else:
         lines.append("Veto: none")
-    if primary_reason:
-        lines.append(f"Primary reason: {primary_reason}")
     return "\n".join(lines)

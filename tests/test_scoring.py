@@ -1,21 +1,35 @@
-from altcoin_trend.features.scoring import (
-    ScoreInput,
-    compute_final_score,
-    tier_for_score,
-)
+from dataclasses import fields
+
+from altcoin_trend.features.scoring import ScoreInput, ScoreResult, compute_final_score, tier_for_score
 from altcoin_trend.signals.explain import build_explain_text
 from altcoin_trend.signals.ranking import rank_scores
+
+
+def test_scoreinput_and_scoreresult_public_fields_match_plan():
+    assert [field.name for field in fields(ScoreInput)] == [
+        "trend_score",
+        "volume_breakout_score",
+        "relative_strength_score",
+        "derivatives_score",
+        "quality_score",
+        "veto_reason_codes",
+    ]
+    assert [field.name for field in fields(ScoreResult)] == [
+        "final_score",
+        "tier",
+        "primary_reason",
+    ]
 
 
 def test_compute_final_score_uses_mvp_weights_and_tier():
     result = compute_final_score(
         ScoreInput(
-            trend=100,
-            volume=80,
-            relative=60,
-            derivatives=40,
-            quality=100,
-            veto=[],
+            trend_score=100,
+            volume_breakout_score=80,
+            relative_strength_score=60,
+            derivatives_score=40,
+            quality_score=100,
+            veto_reason_codes=[],
         )
     )
 
@@ -27,12 +41,12 @@ def test_compute_final_score_uses_mvp_weights_and_tier():
 def test_compute_final_score_veto_forces_rejected_and_keeps_score():
     result = compute_final_score(
         ScoreInput(
-            trend=100,
-            volume=80,
-            relative=60,
-            derivatives=40,
-            quality=100,
-            veto=["volume_breakout_low", "quality_low"],
+            trend_score=100,
+            volume_breakout_score=80,
+            relative_strength_score=60,
+            derivatives_score=40,
+            quality_score=100,
+            veto_reason_codes=["volume_breakout_low", "quality_low"],
         )
     )
 
@@ -65,20 +79,22 @@ def test_rank_scores_orders_by_final_score_and_adds_scope_and_rank():
 def test_build_explain_text_includes_key_fields():
     text = build_explain_text(
         {
+            "exchange": "binance",
             "symbol": "SOLUSDT",
             "final_score": 88.4,
             "tier": "strong",
-            "trend": 92.0,
-            "volume": 81.0,
-            "relative": 77.5,
-            "derivatives": 64.0,
-            "quality": 90.0,
-            "veto": [],
-            "primary_reason": "",
+            "trend_score": 92.0,
+            "volume_breakout_score": 81.0,
+            "relative_strength_score": 77.5,
+            "derivatives_score": 64.0,
+            "quality_score": 90.0,
+            "veto_reason_codes": [],
         }
     )
 
-    assert "SOLUSDT" in text
+    assert text.splitlines()[0] == "binance:SOLUSDT"
     assert "Score: 88.4" in text
     assert "Tier: strong" in text
+    assert "Breakdown:" in text
     assert "Trend" in text
+    assert "Veto: none" in text

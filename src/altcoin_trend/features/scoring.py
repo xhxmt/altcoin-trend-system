@@ -12,12 +12,12 @@ from altcoin_trend.features.volume import clamp_score as clamp_volume_score
 
 @dataclass(frozen=True)
 class ScoreInput:
-    trend: float
-    volume: float
-    relative: float
-    derivatives: float
-    quality: float
-    veto: Sequence[str]
+    trend_score: float
+    volume_breakout_score: float
+    relative_strength_score: float
+    derivatives_score: float
+    quality_score: float
+    veto_reason_codes: Sequence[str]
 
 
 @dataclass(frozen=True)
@@ -25,12 +25,6 @@ class ScoreResult:
     final_score: float
     tier: str
     primary_reason: str
-    trend: float
-    volume: float
-    relative: float
-    derivatives: float
-    quality: float
-    veto: tuple[str, ...]
 
 
 def tier_for_score(final_score: float) -> str:
@@ -44,11 +38,11 @@ def tier_for_score(final_score: float) -> str:
 
 
 def compute_final_score(score_input: ScoreInput) -> ScoreResult:
-    trend = clamp_trend_score(score_input.trend)
-    volume = clamp_volume_score(score_input.volume)
-    relative = clamp_relative_strength_score(score_input.relative)
-    derivatives = clamp_derivatives_score(score_input.derivatives)
-    quality = clamp_quality_score(score_input.quality)
+    trend = clamp_trend_score(score_input.trend_score)
+    volume = clamp_volume_score(score_input.volume_breakout_score)
+    relative = clamp_relative_strength_score(score_input.relative_strength_score)
+    derivatives = clamp_derivatives_score(score_input.derivatives_score)
+    quality = clamp_quality_score(score_input.quality_score)
 
     final_score = round(
         0.35 * trend
@@ -58,27 +52,15 @@ def compute_final_score(score_input: ScoreInput) -> ScoreResult:
         + 0.05 * quality,
         4,
     )
-    veto = tuple(score_input.veto)
+    veto = tuple(score_input.veto_reason_codes)
     if veto:
         return ScoreResult(
             final_score=final_score,
             tier="rejected",
             primary_reason=veto[0],
-            trend=trend,
-            volume=volume,
-            relative=relative,
-            derivatives=derivatives,
-            quality=quality,
-            veto=veto,
         )
     return ScoreResult(
         final_score=final_score,
         tier=tier_for_score(final_score),
         primary_reason="",
-        trend=trend,
-        volume=volume,
-        relative=relative,
-        derivatives=derivatives,
-        quality=quality,
-        veto=veto,
     )

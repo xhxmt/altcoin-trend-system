@@ -15,7 +15,13 @@ def build_explain_text(row: Mapping[str, Any] | Any) -> str:
     symbol = row["symbol"] if isinstance(row, Mapping) else getattr(row, "symbol")
     final_score = _get(row, "final_score", 0.0)
     tier = _get(row, "tier", "rejected")
-    veto = tuple(_get(row, "veto_reason_codes", ()))
+    raw_veto = _get(row, "veto_reason_codes", ())
+    if raw_veto is None:
+        veto = ()
+    elif isinstance(raw_veto, str):
+        veto = (raw_veto,)
+    else:
+        veto = tuple(raw_veto)
 
     lines = [
         f"{exchange}:{symbol}",

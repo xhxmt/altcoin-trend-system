@@ -17,7 +17,10 @@ class ScoreInput:
     relative_strength_score: float
     derivatives_score: float
     quality_score: float
-    veto_reason_codes: Sequence[str]
+    veto_reason_codes: tuple[str, ...] | Sequence[str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "veto_reason_codes", tuple(self.veto_reason_codes))
 
 
 @dataclass(frozen=True)

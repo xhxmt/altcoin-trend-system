@@ -41,6 +41,8 @@ class BinancePublicAdapter:
         return instruments
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:
+        if not isinstance(payload, dict):
+            return None
         data = payload.get("data", payload)
         if not isinstance(data, dict):
             return None
@@ -50,18 +52,21 @@ class BinancePublicAdapter:
         required_fields = ("s", "t", "o", "h", "l", "c", "v", "q", "x")
         if any(field not in kline for field in required_fields):
             return None
-        return MarketBar1m(
-            exchange=self.exchange,
-            symbol=kline["s"],
-            ts=utc_from_ms(int(kline["t"])),
-            open=float(kline["o"]),
-            high=float(kline["h"]),
-            low=float(kline["l"]),
-            close=float(kline["c"]),
-            volume=float(kline["v"]),
-            quote_volume=float(kline["q"]),
-            trade_count=int(kline["n"]) if kline.get("n") is not None else None,
-            taker_buy_base=float(kline["V"]) if kline.get("V") is not None else None,
-            taker_buy_quote=float(kline["Q"]) if kline.get("Q") is not None else None,
-            is_closed=bool(kline.get("x")),
-        )
+        try:
+            return MarketBar1m(
+                exchange=self.exchange,
+                symbol=kline["s"],
+                ts=utc_from_ms(int(kline["t"])),
+                open=float(kline["o"]),
+                high=float(kline["h"]),
+                low=float(kline["l"]),
+                close=float(kline["c"]),
+                volume=float(kline["v"]),
+                quote_volume=float(kline["q"]),
+                trade_count=int(kline["n"]) if kline.get("n") is not None else None,
+                taker_buy_base=float(kline["V"]) if kline.get("V") is not None else None,
+                taker_buy_quote=float(kline["Q"]) if kline.get("Q") is not None else None,
+                is_closed=bool(kline.get("x")),
+            )
+        except (TypeError, ValueError, KeyError):
+            return None

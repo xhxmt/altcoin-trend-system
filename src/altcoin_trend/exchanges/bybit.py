@@ -36,6 +36,8 @@ class BybitPublicAdapter:
         return instruments
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:
+        if not isinstance(payload, dict):
+            return None
         rows = payload.get("data") or []
         if not isinstance(rows, list) or not rows:
             return None
@@ -51,18 +53,21 @@ class BybitPublicAdapter:
         required_fields = ("start", "open", "high", "low", "close", "volume", "turnover", "confirm")
         if not isinstance(row, dict) or any(field not in row for field in required_fields):
             return None
-        return MarketBar1m(
-            exchange=self.exchange,
-            symbol=topic_symbol,
-            ts=utc_from_ms(int(row["start"])),
-            open=float(row["open"]),
-            high=float(row["high"]),
-            low=float(row["low"]),
-            close=float(row["close"]),
-            volume=float(row["volume"]),
-            quote_volume=float(row["turnover"]),
-            trade_count=None,
-            taker_buy_base=None,
-            taker_buy_quote=None,
-            is_closed=bool(row.get("confirm")),
-        )
+        try:
+            return MarketBar1m(
+                exchange=self.exchange,
+                symbol=topic_symbol,
+                ts=utc_from_ms(int(row["start"])),
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row["volume"]),
+                quote_volume=float(row["turnover"]),
+                trade_count=None,
+                taker_buy_base=None,
+                taker_buy_quote=None,
+                is_closed=bool(row.get("confirm")),
+            )
+        except (TypeError, ValueError, KeyError):
+            return None

@@ -1,6 +1,7 @@
 import typer
 
 from altcoin_trend.config import load_settings
+from altcoin_trend.daemon import main as daemon_main
 from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.scheduler import run_once_pipeline
 
@@ -37,7 +38,7 @@ def run_once() -> None:
 
 @app.command("daemon")
 def daemon() -> None:
-    typer.echo("Daemon loop is wired in Task 10")
+    daemon_main()
 
 
 @app.command("rank")
@@ -67,3 +68,7 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
 def explain(symbol: str, exchange: str = typer.Option(..., "--exchange")) -> None:
     typer.echo(f"{exchange}:{symbol.upper()}")
     typer.echo("Score: unavailable until feature snapshots exist")
+
+
+if __name__ == "__main__":
+    app()

@@ -24,3 +24,13 @@ acts run-once
 acts rank --limit 30
 acts explain SOLUSDT --exchange binance
 ```
+
+## systemd User Service
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/user/altcoin-trend.service ~/.config/systemd/user/altcoin-trend.service
+systemctl --user daemon-reload
+systemctl --user enable --now altcoin-trend
+systemctl --user status altcoin-trend --no-pager
+```

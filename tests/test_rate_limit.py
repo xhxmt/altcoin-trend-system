@@ -6,6 +6,8 @@ def test_token_bucket_rejects_invalid_configuration():
         {"capacity": 0, "refill_per_second": 1},
         {"capacity": -1, "refill_per_second": 1},
         {"capacity": 1, "refill_per_second": -1},
+        {"capacity": float("nan"), "refill_per_second": 1},
+        {"capacity": 1, "refill_per_second": float("inf")},
     ):
         try:
             TokenBucket(**kwargs)
@@ -32,7 +34,7 @@ def test_token_bucket_rejects_over_budget_without_sleeping():
 def test_token_bucket_rejects_non_positive_weights():
     bucket = TokenBucket(capacity=3, refill_per_second=1)
 
-    for weight in (0, -1):
+    for weight in (0, -1, float("nan"), float("inf")):
         try:
             bucket.try_acquire(weight)
         except ValueError:

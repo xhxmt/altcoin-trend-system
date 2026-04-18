@@ -173,6 +173,15 @@ def test_binance_kline_ws_parser_returns_closed_bar():
     assert bar.is_closed is True
 
 
+def test_binance_kline_ws_parser_rejects_non_1m_interval():
+    adapter = BinancePublicAdapter()
+
+    payload = load_json("binance_kline_ws.json")
+    payload["data"]["k"]["i"] = "5m"
+
+    assert adapter.parse_kline_message(payload) is None
+
+
 def test_binance_kline_ws_parser_rejects_non_bool_close_flag():
     adapter = BinancePublicAdapter()
 
@@ -376,6 +385,15 @@ def test_bybit_kline_ws_parser_returns_closed_bar():
     assert bar.close == 101.0
     assert bar.quote_volume == 124000.5
     assert bar.is_closed is True
+
+
+def test_bybit_kline_ws_parser_rejects_non_1m_topic():
+    adapter = BybitPublicAdapter()
+
+    payload = load_json("bybit_kline_ws.json")
+    payload["topic"] = "kline.5.SOLUSDT"
+
+    assert adapter.parse_kline_message(payload) is None
 
 
 def test_bybit_kline_ws_parser_rejects_non_bool_close_flag():

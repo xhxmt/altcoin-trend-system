@@ -81,10 +81,10 @@ class BinancePublicAdapter:
         kline = data.get("k")
         if not isinstance(kline, dict) or not kline:
             return None
-        required_fields = ("s", "t", "o", "h", "l", "c", "v", "q", "x")
+        required_fields = ("s", "i", "t", "o", "h", "l", "c", "v", "q", "x")
         if any(field not in kline for field in required_fields):
             return None
-        if _nonempty_str(kline.get("s")) is None or not isinstance(kline.get("x"), bool):
+        if _nonempty_str(kline.get("s")) is None or kline.get("i") != "1m" or not isinstance(kline.get("x"), bool):
             return None
         try:
             return MarketBar1m(

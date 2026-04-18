@@ -1,4 +1,5 @@
 import time
+import math
 from dataclasses import dataclass, field
 
 
@@ -10,6 +11,10 @@ class TokenBucket:
     _updated_at: float = field(init=False)
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.capacity):
+            raise ValueError("capacity must be finite")
+        if not math.isfinite(self.refill_per_second):
+            raise ValueError("refill_per_second must be finite")
         if self.capacity <= 0:
             raise ValueError("capacity must be > 0")
         if self.refill_per_second < 0:
@@ -24,6 +29,8 @@ class TokenBucket:
         self.available = min(self.capacity, self.available + elapsed * self.refill_per_second)
 
     def try_acquire(self, weight: float = 1) -> bool:
+        if not math.isfinite(weight):
+            raise ValueError("weight must be finite")
         if weight <= 0:
             raise ValueError("weight must be > 0")
         self._refill()

@@ -81,7 +81,7 @@ class BybitPublicAdapter:
             topic_symbol = _nonempty_str(topic_symbol)
         elif isinstance(topic, str):
             parts = topic.split(".")
-            if len(parts) == 3 and parts[0] == "kline" and parts[1].strip() and parts[2].strip():
+            if len(parts) == 3 and parts[0] == "kline" and parts[1] == "1" and parts[2].strip():
                 topic_symbol = parts[2]
         if topic_symbol is None:
             return None

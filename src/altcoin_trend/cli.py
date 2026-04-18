@@ -21,7 +21,11 @@ def init_db() -> None:
 
 @app.command("bootstrap")
 def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -> None:
-    typer.echo(f"Bootstrap requested for {lookback_days} days")
+    settings = load_settings()
+    typer.echo(
+        f"Bootstrap requested lookback_days={lookback_days} "
+        f"exchanges={','.join(settings.exchanges)} quote={settings.quote_asset}"
+    )
 
 
 @app.command("run-once")

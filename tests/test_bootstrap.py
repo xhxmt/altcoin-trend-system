@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 from altcoin_trend.config import AppSettings
+from altcoin_trend.exchanges.binance import BinancePublicAdapter
+from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import filter_instruments
 from altcoin_trend.ingest.normalize import market_bar_to_row
 from altcoin_trend.models import Instrument, MarketBar1m
@@ -113,3 +115,56 @@ def test_market_bar_to_row_normalizes_expected_fields():
         "data_status": "healthy",
         "reason_codes": [],
     }
+
+
+def test_binance_parse_rest_klines_converts_row():
+    adapter = BinancePublicAdapter()
+    rows = [
+        [
+            1710000000000,
+            "100.0",
+            "102.0",
+            "99.5",
+            "101.0",
+            "1234.5",
+            1710000059999,
+            "124000.5",
+            222,
+            "600.0",
+            "60600.0",
+            "0",
+        ]
+    ]
+
+    bars = adapter.parse_rest_klines("SOLUSDT", rows)
+
+    assert len(bars) == 1
+    bar = bars[0]
+    assert bar.exchange == "binance"
+    assert bar.symbol == "SOLUSDT"
+    assert bar.close == 101.0
+    assert bar.is_closed is True
+
+
+def test_bybit_parse_rest_klines_converts_row():
+    adapter = BybitPublicAdapter()
+    rows = [
+        [
+            "1710000000000",
+            "100.0",
+            "102.0",
+            "99.5",
+            "101.0",
+            "1234.5",
+            "124000.5",
+        ]
+    ]
+
+    bars = adapter.parse_rest_klines("SOLUSDT", rows)
+
+    assert len(bars) == 1
+    bar = bars[0]
+    assert bar.exchange == "bybit"
+    assert bar.symbol == "SOLUSDT"
+    assert bar.quote_volume == 124000.5
+    assert bar.is_closed is True

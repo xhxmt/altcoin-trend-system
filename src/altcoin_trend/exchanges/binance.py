@@ -1,5 +1,7 @@
 import math
 
+import httpx
+
 from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
 
 
@@ -28,12 +30,55 @@ def _filter_value(filters: list[dict], filter_type: str, key: str) -> float | No
 class BinancePublicAdapter:
     exchange = "binance"
     market_type = "usdt_perp"
+    base_url = "https://fapi.binance.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
         raise NotImplementedError("BinancePublicAdapter does not implement live symbol listing")
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
-        raise NotImplementedError("BinancePublicAdapter does not implement live kline fetching")
+        response = httpx.get(
+            f"{self.base_url}/fapi/v1/klines",
+            params={
+                "symbol": symbol,
+                "interval": "1m",
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": 1500,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        return self.parse_rest_klines(symbol, payload)
+
+    def parse_rest_klines(self, symbol: str, rows: list[list]) -> list[MarketBar1m]:
+        bars: list[MarketBar1m] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 11:
+                continue
+            try:
+                bars.append(
+                    MarketBar1m(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row[0])),
+                        open=_finite_float(row[1]),
+                        high=_finite_float(row[2]),
+                        low=_finite_float(row[3]),
+                        close=_finite_float(row[4]),
+                        volume=_finite_float(row[5]),
+                        quote_volume=_finite_float(row[7]),
+                        trade_count=int(row[8]) if row[8] is not None else None,
+                        taker_buy_base=_finite_float(row[9]) if row[9] is not None else None,
+                        taker_buy_quote=_finite_float(row[10]) if row[10] is not None else None,
+                        is_closed=True,
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return bars
 
     def parse_exchange_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):

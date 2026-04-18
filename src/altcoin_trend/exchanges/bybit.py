@@ -1,5 +1,7 @@
 import math
 
+import httpx
+
 from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
 
 
@@ -19,12 +21,57 @@ def _finite_float(value: object) -> float:
 class BybitPublicAdapter:
     exchange = "bybit"
     market_type = "usdt_perp"
+    base_url = "https://api.bybit.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
         raise NotImplementedError("BybitPublicAdapter does not implement live symbol listing")
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
-        raise NotImplementedError("BybitPublicAdapter does not implement live kline fetching")
+        response = httpx.get(
+            f"{self.base_url}/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": symbol,
+                "interval": "1",
+                "start": start_ms,
+                "end": end_ms,
+                "limit": 1000,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = payload.get("result", {}).get("list", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            return []
+        return self.parse_rest_klines(symbol, rows)
+
+    def parse_rest_klines(self, symbol: str, rows: list[list[str]]) -> list[MarketBar1m]:
+        bars: list[MarketBar1m] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 7:
+                continue
+            try:
+                bars.append(
+                    MarketBar1m(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row[0])),
+                        open=_finite_float(row[1]),
+                        high=_finite_float(row[2]),
+                        low=_finite_float(row[3]),
+                        close=_finite_float(row[4]),
+                        volume=_finite_float(row[5]),
+                        quote_volume=_finite_float(row[6]),
+                        trade_count=None,
+                        taker_buy_base=None,
+                        taker_buy_quote=None,
+                        is_closed=True,
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return bars
 
     def parse_instruments_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):

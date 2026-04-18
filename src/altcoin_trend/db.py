@@ -1,5 +1,6 @@
 from importlib import resources
 from pathlib import Path
+from typing import Iterable
 
 from sqlalchemy import Engine, create_engine, text
 
@@ -23,6 +24,22 @@ def run_sql_file(engine: Engine, relative_path: str) -> None:
     sql_text = sql_path.read_text(encoding="utf-8")
     with engine.begin() as connection:
         connection.execute(text(sql_text))
+
+
+def insert_rows(engine: Engine, table_name: str, rows: Iterable[dict]) -> int:
+    rows = list(rows)
+    if not rows:
+        return 0
+
+    columns = list(rows[0].keys())
+    column_sql = ", ".join(columns)
+    placeholder_sql = ", ".join(f":{column}" for column in columns)
+    statement = text(f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholder_sql})")
+
+    with engine.begin() as connection:
+        connection.execute(statement, rows)
+
+    return len(rows)
 
 
 def run_all_migrations(engine: Engine) -> None:

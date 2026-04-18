@@ -11,6 +11,12 @@ def test_sql_files_create_required_schemas_and_tables():
     assert "CREATE SCHEMA IF NOT EXISTS alt_raw" in sql_text
     assert "CREATE SCHEMA IF NOT EXISTS alt_core" in sql_text
     assert "CREATE SCHEMA IF NOT EXISTS alt_signal" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_ingest.daemon_runs" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_ingest.bootstrap_runs" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_ingest.repair_runs" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_raw.exchange_messages" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_raw.rest_fetch_runs" in sql_text
+    assert "CREATE TABLE IF NOT EXISTS alt_raw.ws_connection_events" in sql_text
     assert "CREATE TABLE IF NOT EXISTS alt_core.asset_master" in sql_text
     assert "CREATE TABLE IF NOT EXISTS alt_core.market_1m" in sql_text
     assert "CREATE TABLE IF NOT EXISTS alt_core.market_bar" in sql_text

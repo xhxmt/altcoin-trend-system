@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -12,7 +12,9 @@ from altcoin_trend.db import insert_rows
 from altcoin_trend.features.indicators import add_ema, adx, atr
 from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.features.scoring import ScoreInput, compute_final_score
+from altcoin_trend.signals.alerts import build_alert_event_rows
 from altcoin_trend.signals.ranking import rank_scores
+from altcoin_trend.signals.telegram import TelegramClient
 
 
 @dataclass(frozen=True)
@@ -245,23 +247,25 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
     statement = text(
         """
         SELECT
-            ts,
-            rank_scope,
-            rank,
-            asset_id,
-            symbol,
-            base_asset,
-            final_score,
-            tier,
-            primary_reason
-        FROM alt_signal.rank_snapshot
-        WHERE rank_scope = :rank_scope
-          AND ts = (
+            r.ts,
+            r.rank_scope,
+            r.rank,
+            r.asset_id,
+            a.exchange,
+            r.symbol,
+            r.base_asset,
+            r.final_score,
+            r.tier,
+            r.primary_reason
+        FROM alt_signal.rank_snapshot AS r
+        JOIN alt_core.asset_master AS a USING (asset_id)
+        WHERE r.rank_scope = :rank_scope
+          AND r.ts = (
               SELECT MAX(ts)
               FROM alt_signal.rank_snapshot
               WHERE rank_scope = :rank_scope
           )
-        ORDER BY rank
+        ORDER BY r.rank
         LIMIT :limit
         """
     )
@@ -306,6 +310,61 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
         result = connection.execute(statement, {"symbol": symbol.upper(), "exchange": exchange})
         row = result.mappings().first()
         return dict(row) if row is not None else None
+
+
+def _load_recent_alert_events(engine: Engine, since: datetime) -> list[dict[str, Any]]:
+    statement = text(
+        """
+        SELECT
+            alert_id,
+            ts,
+            asset_id,
+            symbol,
+            alert_type,
+            final_score,
+            message,
+            payload,
+            delivery_status,
+            delivery_error
+        FROM alt_signal.alert_events
+        WHERE ts >= :since
+        ORDER BY ts DESC
+        """
+    )
+    with engine.begin() as connection:
+        result = connection.execute(statement, {"since": since})
+        return [dict(row) for row in result.mappings().all()]
+
+
+def process_alerts(
+    engine: Engine,
+    now: datetime,
+    cooldown_seconds: int,
+    telegram_client: TelegramClient | None = None,
+    rank_limit: int = 30,
+) -> tuple[int, int]:
+    rank_rows = load_rank_rows(engine, rank_scope="all", limit=rank_limit)
+    since = now - timedelta(seconds=cooldown_seconds)
+    recent_events = _load_recent_alert_events(engine, since)
+    alert_rows = build_alert_event_rows(
+        rank_rows=rank_rows,
+        recent_events=recent_events,
+        now=now,
+        cooldown_seconds=cooldown_seconds,
+    )
+    sent_count = 0
+    for row in alert_rows:
+        if telegram_client is None:
+            continue
+        result = telegram_client.send_message(row["message"])
+        if result.ok:
+            row["delivery_status"] = "sent"
+            sent_count += 1
+        else:
+            row["delivery_status"] = "failed"
+            row["delivery_error"] = result.error
+    inserted_count = insert_rows(engine, "alt_signal.alert_events", alert_rows)
+    return inserted_count, sent_count
 
 
 def run_once_pipeline(

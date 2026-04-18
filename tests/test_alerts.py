@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from altcoin_trend.signals.alerts import AlertCooldown, build_strong_alert_message
+from altcoin_trend.signals.alerts import AlertCooldown, build_alert_event_rows, build_strong_alert_message
 from altcoin_trend.signals.telegram import TelegramClient
 
 
@@ -92,6 +92,42 @@ def test_build_strong_alert_message_strips_blank_items_to_none():
 
     assert "Reasons: breakout confirmed" in text
     assert "Risks: none" in text
+
+
+def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_duplicate():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_rows = [
+        {
+            "asset_id": 17,
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "tier": "strong",
+            "final_score": 88.4,
+            "trend_score": 90.0,
+            "volume_breakout_score": 80.0,
+            "relative_strength_score": 50.0,
+            "derivatives_score": 50.0,
+            "quality_score": 100.0,
+        }
+    ]
+
+    first_events = build_alert_event_rows(rank_rows, recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(first_events) == 1
+    assert first_events[0]["asset_id"] == 17
+    assert first_events[0]["alert_type"] == "strong_trend"
+    assert first_events[0]["delivery_status"] == "pending"
+    assert first_events[0]["payload"]["current_tier"] == "strong"
+    assert "[STRONG] SOLUSDT Binance" in first_events[0]["message"]
+
+    duplicate_events = build_alert_event_rows(
+        rank_rows,
+        recent_events=[first_events[0]],
+        now=now + timedelta(minutes=10),
+        cooldown_seconds=3600,
+    )
+
+    assert duplicate_events == []
 
 
 def test_telegram_client_missing_config_returns_error_without_network():

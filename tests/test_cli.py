@@ -129,3 +129,17 @@ def test_cli_status_reports_loaded_settings(monkeypatch):
 
     assert result.exit_code == 0
     assert "Status: configured exchanges=binance,bybit interval=90s" in result.output
+
+
+def test_cli_alerts_processes_pending_alerts(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(alert_cooldown_seconds=3600))
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.process_alerts",
+        lambda engine, now, cooldown_seconds, telegram_client: (2, 0),
+    )
+
+    result = CliRunner().invoke(app, ["alerts", "--since", "1h"])
+
+    assert result.exit_code == 0
+    assert "Alerts processed inserted=2 sent=0 since=1h" in result.output

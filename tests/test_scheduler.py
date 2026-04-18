@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from altcoin_trend.scheduler import RunOnceResult, build_snapshot_rows, run_once_pipeline
+from altcoin_trend.scheduler import RunOnceResult, build_snapshot_rows, process_alerts, run_once_pipeline
 
 
 def test_run_once_pipeline_defaults_to_degraded_when_no_step():
@@ -168,3 +168,60 @@ def test_run_once_pipeline_reports_degraded_when_no_market_rows(monkeypatch):
 
     assert result.status == "degraded"
     assert result.message == "no market rows available"
+
+
+def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    inserted = []
+
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler.load_rank_rows",
+        lambda engine, rank_scope, limit: [
+            {
+                "asset_id": 17,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "tier": "strong",
+                "final_score": 88.4,
+                "trend_score": 90.0,
+                "volume_breakout_score": 80.0,
+                "relative_strength_score": 50.0,
+                "derivatives_score": 50.0,
+                "quality_score": 100.0,
+            }
+        ],
+    )
+    monkeypatch.setattr("altcoin_trend.scheduler._load_recent_alert_events", lambda engine, since: [])
+
+    def fake_insert_rows(engine, table_name, rows):
+        inserted.append((table_name, list(rows)))
+        return len(inserted[-1][1])
+
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", fake_insert_rows)
+
+    class Telegram:
+        messages = []
+
+        def send_message(self, text):
+            self.messages.append(text)
+
+            class Result:
+                ok = True
+                error = ""
+
+            return Result()
+
+    telegram = Telegram()
+
+    inserted_count, sent_count = process_alerts(
+        engine=object(),
+        now=now,
+        cooldown_seconds=3600,
+        telegram_client=telegram,
+    )
+
+    assert inserted_count == 1
+    assert sent_count == 1
+    assert inserted[0][0] == "alt_signal.alert_events"
+    assert inserted[0][1][0]["delivery_status"] == "sent"
+    assert "[STRONG] SOLUSDT Binance" in telegram.messages[0]

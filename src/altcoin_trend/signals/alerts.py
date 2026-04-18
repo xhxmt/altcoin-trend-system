@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from altcoin_trend.signals.state import evaluate_transition
+
 
 def _get(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
     if isinstance(row, Mapping):
@@ -87,3 +89,82 @@ def build_strong_alert_message(row: Mapping[str, Any] | Any) -> str:
         f"Risks: {', '.join(risks) if risks else 'none'}",
     ]
     return "\n".join(lines)
+
+
+def _recent_event_key(event: Mapping[str, Any]) -> tuple[int, str]:
+    return (int(event["asset_id"]), str(event["alert_type"]))
+
+
+def _event_recent_enough(event: Mapping[str, Any], now: datetime, cooldown_seconds: int) -> bool:
+    event_ts = _require_aware_datetime(event["ts"])
+    return (now - event_ts).total_seconds() < cooldown_seconds
+
+
+def _previous_tier_for_asset(asset_id: int, recent_events: list[Mapping[str, Any]]) -> str:
+    asset_events = [event for event in recent_events if int(event.get("asset_id", -1)) == asset_id]
+    if not asset_events:
+        return "monitor"
+    latest = max(asset_events, key=lambda event: event["ts"])
+    payload = latest.get("payload") or {}
+    if isinstance(payload, Mapping):
+        current_tier = payload.get("current_tier")
+        if isinstance(current_tier, str) and current_tier:
+            return current_tier
+    return "monitor"
+
+
+def build_alert_event_rows(
+    rank_rows: list[Mapping[str, Any]],
+    recent_events: list[Mapping[str, Any]],
+    now: datetime,
+    cooldown_seconds: int,
+) -> list[dict[str, Any]]:
+    current_time = _require_aware_datetime(now)
+    events_by_key = {
+        _recent_event_key(event): event
+        for event in recent_events
+        if "asset_id" in event and "alert_type" in event and "ts" in event
+    }
+    alert_rows: list[dict[str, Any]] = []
+
+    for row in rank_rows:
+        asset_id = int(_get(row, "asset_id"))
+        current_tier = str(_get(row, "tier", "rejected"))
+        previous_tier = _previous_tier_for_asset(asset_id, recent_events)
+        positive_breakout = current_tier == "strong" and previous_tier not in {"strong", "watchlist"}
+        decision = evaluate_transition(
+            previous_tier=previous_tier,
+            current_tier=current_tier,
+            breakout_confirmed=positive_breakout,
+            oi_confirmed=current_tier == "strong",
+            veto_reason_codes=_get(row, "veto_reason_codes", ()),
+        )
+        if not decision.should_alert:
+            continue
+
+        recent_event = events_by_key.get((asset_id, decision.alert_type))
+        if recent_event is not None and _event_recent_enough(recent_event, current_time, cooldown_seconds):
+            continue
+
+        message = build_strong_alert_message(row)
+        payload = {
+            "exchange": _get(row, "exchange", "unknown"),
+            "current_tier": current_tier,
+            "previous_tier": previous_tier,
+            "rank": _get(row, "rank", None),
+        }
+        alert_rows.append(
+            {
+                "ts": current_time,
+                "asset_id": asset_id,
+                "symbol": str(_get(row, "symbol")),
+                "alert_type": decision.alert_type,
+                "final_score": float(_get(row, "final_score", 0.0)),
+                "message": message,
+                "payload": payload,
+                "delivery_status": "pending",
+                "delivery_error": None,
+            }
+        )
+
+    return alert_rows

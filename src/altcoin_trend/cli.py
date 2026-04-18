@@ -8,8 +8,9 @@ from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import bootstrap_exchange
-from altcoin_trend.scheduler import load_explain_row, load_rank_rows, run_once_pipeline
+from altcoin_trend.scheduler import load_explain_row, load_rank_rows, process_alerts, run_once_pipeline
 from altcoin_trend.signals.explain import build_explain_text
+from altcoin_trend.signals.telegram import TelegramClient
 
 app = typer.Typer(help="Altcoin trend system CLI")
 
@@ -90,7 +91,21 @@ def status() -> None:
 
 @app.command("alerts")
 def alerts(since: str = typer.Option("24h", "--since")) -> None:
-    typer.echo(f"Alerts requested since {since}")
+    settings = load_settings()
+    engine = build_engine(settings)
+    telegram_client = None
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        telegram_client = TelegramClient(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+        )
+    inserted, sent = process_alerts(
+        engine=engine,
+        now=datetime.now(timezone.utc),
+        cooldown_seconds=settings.alert_cooldown_seconds,
+        telegram_client=telegram_client,
+    )
+    typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={since}")
 
 
 @app.command("explain")

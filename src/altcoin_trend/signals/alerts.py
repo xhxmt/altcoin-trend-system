@@ -16,10 +16,19 @@ def _normalize_items(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
-        return (value,)
+        normalized = value.strip()
+        return (normalized,) if normalized else ()
     if isinstance(value, Sequence):
-        return tuple(str(item) for item in value)
-    return (str(value),)
+        normalized = tuple(str(item).strip() for item in value)
+        return tuple(item for item in normalized if item)
+    normalized = str(value).strip()
+    return (normalized,) if normalized else ()
+
+
+def _require_aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    return value
 
 
 @dataclass
@@ -34,7 +43,7 @@ class AlertCooldown:
         alert_type: str,
         now: datetime | None = None,
     ) -> bool:
-        current_time = now or datetime.now(timezone.utc)
+        current_time = _require_aware_datetime(now or datetime.now(timezone.utc))
         last_sent = self._last_sent.get((exchange, symbol, alert_type))
         if last_sent is None:
             return True
@@ -47,7 +56,7 @@ class AlertCooldown:
         alert_type: str,
         now: datetime | None = None,
     ) -> None:
-        current_time = now or datetime.now(timezone.utc)
+        current_time = _require_aware_datetime(now or datetime.now(timezone.utc))
         self._last_sent[(exchange, symbol, alert_type)] = current_time
 
 

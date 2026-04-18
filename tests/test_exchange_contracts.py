@@ -396,6 +396,15 @@ def test_bybit_kline_ws_parser_rejects_non_1m_topic():
     assert adapter.parse_kline_message(payload) is None
 
 
+def test_bybit_kline_ws_parser_rejects_non_1m_topic_even_with_symbol():
+    adapter = BybitPublicAdapter()
+
+    payload = load_json("bybit_kline_ws.json")
+    payload["topic"] = "kline.5.SOLUSDT"
+
+    assert adapter.parse_kline_message(payload, symbol="SOLUSDT") is None
+
+
 def test_bybit_kline_ws_parser_rejects_non_bool_close_flag():
     adapter = BybitPublicAdapter()
 

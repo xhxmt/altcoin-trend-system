@@ -76,14 +76,13 @@ class BybitPublicAdapter:
             return None
         row = rows[0]
         topic = payload.get("topic")
-        topic_symbol = symbol
-        if topic_symbol is not None:
-            topic_symbol = _nonempty_str(topic_symbol)
-        elif isinstance(topic, str):
-            parts = topic.split(".")
-            if len(parts) == 3 and parts[0] == "kline" and parts[1] == "1" and parts[2].strip():
-                topic_symbol = parts[2]
-        if topic_symbol is None:
+        if not isinstance(topic, str):
+            return None
+        parts = topic.split(".")
+        if len(parts) != 3 or parts[0] != "kline" or parts[1] != "1" or not parts[2].strip():
+            return None
+        topic_symbol = parts[2]
+        if symbol is not None and _nonempty_str(symbol) != topic_symbol:
             return None
         required_fields = ("start", "open", "high", "low", "close", "volume", "turnover", "confirm")
         if not isinstance(row, dict) or any(field not in row for field in required_fields):

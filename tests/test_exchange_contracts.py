@@ -42,6 +42,13 @@ def test_binance_kline_ws_parser_returns_closed_bar():
     assert bar.is_closed is True
 
 
+def test_binance_kline_ws_parser_returns_none_for_malformed_payload():
+    adapter = BinancePublicAdapter()
+
+    assert adapter.parse_kline_message({"data": []}) is None
+    assert adapter.parse_kline_message({"data": "not-a-dict"}) is None
+
+
 def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     adapter = BybitPublicAdapter()
 
@@ -67,3 +74,9 @@ def test_bybit_kline_ws_parser_returns_closed_bar():
     assert bar.close == 101.0
     assert bar.quote_volume == 124000.5
     assert bar.is_closed is True
+
+
+def test_bybit_kline_ws_parser_returns_none_without_topic_symbol():
+    adapter = BybitPublicAdapter()
+
+    assert adapter.parse_kline_message({"data": [{"start": 1710000000000}]}) is None

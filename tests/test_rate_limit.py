@@ -1,5 +1,3 @@
-import time
-
 from altcoin_trend.exchanges.rate_limit import TokenBucket
 
 
@@ -17,10 +15,13 @@ def test_token_bucket_rejects_over_budget_without_sleeping():
     assert bucket.available == 3
 
 
-def test_token_bucket_refills_over_time():
+def test_token_bucket_refills_over_time(monkeypatch):
+    from altcoin_trend.exchanges import rate_limit
+
+    clock = iter([100.0, 100.0, 100.12])
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: next(clock))
+
     bucket = TokenBucket(capacity=3, refill_per_second=10)
     assert bucket.try_acquire(3) is True
-
-    time.sleep(0.12)
 
     assert bucket.try_acquire(1) is True

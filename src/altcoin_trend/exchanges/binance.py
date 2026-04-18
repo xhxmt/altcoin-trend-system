@@ -12,6 +12,12 @@ class BinancePublicAdapter:
     exchange = "binance"
     market_type = "usdt_perp"
 
+    def list_usdt_perp_symbols(self) -> list[str]:
+        raise NotImplementedError("BinancePublicAdapter does not implement live symbol listing")
+
+    def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
+        raise NotImplementedError("BinancePublicAdapter does not implement live kline fetching")
+
     def parse_exchange_info(self, payload: dict) -> list[Instrument]:
         instruments: list[Instrument] = []
         for item in payload.get("symbols", []):
@@ -36,8 +42,10 @@ class BinancePublicAdapter:
 
     def parse_kline_message(self, payload: dict, symbol: str | None = None) -> MarketBar1m | None:
         data = payload.get("data", payload)
-        kline = data.get("k", {})
-        if not kline:
+        if not isinstance(data, dict):
+            return None
+        kline = data.get("k")
+        if not isinstance(kline, dict) or not kline:
             return None
         return MarketBar1m(
             exchange=self.exchange,

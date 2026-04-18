@@ -5,6 +5,12 @@ class BybitPublicAdapter:
     exchange = "bybit"
     market_type = "usdt_perp"
 
+    def list_usdt_perp_symbols(self) -> list[str]:
+        raise NotImplementedError("BybitPublicAdapter does not implement live symbol listing")
+
+    def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
+        raise NotImplementedError("BybitPublicAdapter does not implement live kline fetching")
+
     def parse_instruments_info(self, payload: dict) -> list[Instrument]:
         instruments: list[Instrument] = []
         for item in payload.get("result", {}).get("list", []):
@@ -34,7 +40,14 @@ class BybitPublicAdapter:
         if not rows:
             return None
         row = rows[0]
-        topic_symbol = symbol or payload.get("topic", "").split(".")[-1]
+        topic = payload.get("topic")
+        topic_symbol = symbol
+        if topic_symbol is None and isinstance(topic, str):
+            parts = topic.split(".")
+            if parts and parts[-1]:
+                topic_symbol = parts[-1]
+        if topic_symbol is None:
+            return None
         return MarketBar1m(
             exchange=self.exchange,
             symbol=topic_symbol,

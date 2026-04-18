@@ -1,6 +1,7 @@
 from pathlib import Path
+import importlib
 
-from altcoin_trend.config import AppSettings, load_settings
+import altcoin_trend.config as config_module
 
 
 def test_settings_defaults_point_to_project_paths(monkeypatch):
@@ -21,14 +22,14 @@ def test_settings_defaults_point_to_project_paths(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
 
-    settings = AppSettings()
+    settings = config_module.AppSettings()
 
     assert settings.default_exchanges == "binance,bybit"
     assert settings.exchanges == ("binance", "bybit")
     assert settings.quote_asset == "USDT"
     assert settings.min_quote_volume_24h == 5_000_000
     assert settings.signal_interval_seconds == 60
-    assert settings.output_root == "/home/tfisher/altcoin-trend-system/artifacts"
+    assert settings.output_root == str(Path(__file__).resolve().parents[1] / "artifacts")
     assert settings.artifacts_dir == Path(settings.output_root)
     assert settings.blocklist_symbols == set()
 
@@ -38,7 +39,7 @@ def test_settings_env_overrides(monkeypatch):
     monkeypatch.setenv("ACTS_SYMBOL_ALLOWLIST", "SOLUSDT,ARBUSDT")
     monkeypatch.setenv("ACTS_SYMBOL_BLOCKLIST", "  btcusdt , ethusdt ")
 
-    settings = load_settings()
+    settings = config_module.load_settings()
 
     assert settings.database_url == "postgresql+psycopg://tester@/acts_test"
     assert settings.symbol_allowlist == "SOLUSDT,ARBUSDT"
@@ -60,9 +61,41 @@ def test_settings_load_from_env_file_and_keep_env_override(tmp_path, monkeypatch
     )
     monkeypatch.setenv("ACTS_DATABASE_URL", "postgresql+psycopg://from_env/acts")
 
-    settings = AppSettings(_env_file=env_file)
+    settings = config_module.AppSettings(_env_file=env_file)
 
     assert settings.database_url == "postgresql+psycopg://from_env/acts"
     assert settings.output_root == "/tmp/acts-artifacts"
     assert settings.exchanges == ("kraken", "okx")
     assert settings.blocklist_symbols == {"ADAUSDT", "DOTUSDT"}
+
+
+def test_settings_default_env_file_lookup_uses_home_dot_config(tmp_path, monkeypatch):
+    home_dir = tmp_path / "home"
+    env_dir = home_dir / ".config" / "acts"
+    env_dir.mkdir(parents=True)
+    (env_dir / "acts.env").write_text(
+        "\n".join(
+            [
+                "ACTS_DATABASE_URL=postgresql+psycopg://from_default_file/acts",
+                "ACTS_DEFAULT_EXCHANGES=kucoin,gate",
+                "ACTS_SYMBOL_BLOCKLIST=APTUSDT,NEARUSDT",
+            ]
+        )
+    )
+
+    for key in (
+        "ACTS_DATABASE_URL",
+        "ACTS_OUTPUT_ROOT",
+        "ACTS_DEFAULT_EXCHANGES",
+        "ACTS_SYMBOL_ALLOWLIST",
+        "ACTS_SYMBOL_BLOCKLIST",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    reloaded = importlib.reload(config_module)
+    settings = reloaded.AppSettings()
+
+    assert settings.database_url == "postgresql+psycopg://from_default_file/acts"
+    assert settings.exchanges == ("kucoin", "gate")
+    assert settings.blocklist_symbols == {"APTUSDT", "NEARUSDT"}

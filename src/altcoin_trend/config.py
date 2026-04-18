@@ -4,11 +4,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _DEFAULT_ENV_FILE = Path.home() / ".config" / "acts" / "acts.env"
+_FALLBACK_ARTIFACTS_DIR = Path.home() / ".local" / "share" / "altcoin-trend-system" / "artifacts"
+
+
+def _discover_repo_root(start: Path | None = None) -> Path | None:
+    path = (start or Path(__file__)).resolve()
+    for candidate in (path.parent, *path.parents):
+        pyproject = candidate / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        try:
+            if 'name = "altcoin-trend-system"' in pyproject.read_text():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _default_output_root() -> str:
+    repo_root = _discover_repo_root()
+    if repo_root is not None:
+        return str(repo_root / "artifacts")
+    return str(_FALLBACK_ARTIFACTS_DIR)
 
 
 class AppSettings(BaseSettings):
     database_url: str = "postgresql+psycopg://tfisher@/altcoin_trend"
-    output_root: str = "/home/tfisher/altcoin-trend-system/artifacts"
+    output_root: str = _default_output_root()
     default_exchanges: str = "binance,bybit"
     quote_asset: str = "USDT"
     min_quote_volume_24h: float = 5_000_000

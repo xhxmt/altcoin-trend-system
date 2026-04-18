@@ -38,3 +38,5 @@ journalctl --user -u altcoin-trend -f
 
 The unit runs this checkout's `.venv` interpreter, so keep the repository in
 place and refresh the virtual environment there before enabling the service.
+The `~/.config/acts/acts.env` file is optional; built-in defaults are used when
+it is absent.

@@ -5,7 +5,7 @@ After=default.target
 [Service]
 Type=simple
 WorkingDirectory=/home/tfisher/altcoin-trend-system
-EnvironmentFile=%h/.config/acts/acts.env
+EnvironmentFile=-%h/.config/acts/acts.env
 Environment=PYTHONPATH=/home/tfisher/altcoin-trend-system/src
 ExecStart=/home/tfisher/altcoin-trend-system/.venv/bin/python -m altcoin_trend.daemon
 Restart=always

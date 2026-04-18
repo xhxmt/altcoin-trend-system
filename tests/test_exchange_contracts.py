@@ -161,6 +161,51 @@ def test_binance_exchange_info_parser_skips_non_string_symbol_fields():
     assert adapter.parse_exchange_info(payload) == []
 
 
+def test_binance_list_usdt_perp_symbols_fetches_exchange_info(monkeypatch):
+    adapter = BinancePublicAdapter()
+    captured = {}
+    response = _FakeResponse(
+        {
+            "symbols": [
+                {
+                    "symbol": "SOLUSDT",
+                    "pair": "SOLUSDT",
+                    "contractType": "PERPETUAL",
+                    "status": "TRADING",
+                    "baseAsset": "SOL",
+                    "quoteAsset": "USDT",
+                    "onboardDate": 1710000000000,
+                    "filters": [],
+                },
+                {
+                    "symbol": "ETHBUSD",
+                    "pair": "ETHBUSD",
+                    "contractType": "PERPETUAL",
+                    "status": "TRADING",
+                    "baseAsset": "ETH",
+                    "quoteAsset": "BUSD",
+                    "onboardDate": 1710000000000,
+                    "filters": [],
+                },
+            ]
+        }
+    )
+
+    def fake_get(url, timeout):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", fake_get)
+
+    assert adapter.list_usdt_perp_symbols() == ["SOLUSDT"]
+    assert captured == {
+        "url": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+        "timeout": 20,
+    }
+    assert response.raise_called is True
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 
@@ -216,6 +261,12 @@ def test_binance_kline_ws_parser_returns_none_for_malformed_payload():
     assert adapter.parse_kline_message({"data": "not-a-dict"}) is None
     assert adapter.parse_kline_message("not-a-mapping") is None
     assert adapter.parse_kline_message(load_json("binance_kline_ws.json"), symbol="") is None
+
+
+def test_binance_kline_ws_parser_rejects_mismatched_expected_symbol():
+    adapter = BinancePublicAdapter()
+
+    assert adapter.parse_kline_message(load_json("binance_kline_ws.json"), symbol="BTCUSDT") is None
 
 
 def test_binance_kline_ws_parser_returns_none_for_missing_required_fields():
@@ -443,6 +494,88 @@ def test_bybit_instruments_parser_skips_bad_rows():
 
     assert len(instruments) == 1
     assert instruments[0].symbol == "SOLUSDT"
+
+
+def test_bybit_list_usdt_perp_symbols_fetches_all_pages(monkeypatch):
+    adapter = BybitPublicAdapter()
+    calls = []
+    responses = [
+        _FakeResponse(
+            {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "nextPageCursor": "next",
+                    "list": [
+                        {
+                            "symbol": "SOLUSDT",
+                            "status": "Trading",
+                            "baseCoin": "SOL",
+                            "quoteCoin": "USDT",
+                            "launchTime": "1710000000000",
+                            "contractType": "LinearPerpetual",
+                            "priceFilter": {"tickSize": "0.01"},
+                            "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                        }
+                    ],
+                },
+            }
+        ),
+        _FakeResponse(
+            {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "nextPageCursor": "",
+                    "list": [
+                        {
+                            "symbol": "ARBUSDT",
+                            "status": "Trading",
+                            "baseCoin": "ARB",
+                            "quoteCoin": "USDT",
+                            "launchTime": "1710000000000",
+                            "contractType": "LinearPerpetual",
+                            "priceFilter": {"tickSize": "0.0001"},
+                            "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"},
+                        }
+                    ],
+                },
+            }
+        ),
+    ]
+
+    def fake_get(url, params, timeout):
+        calls.append({"url": url, "params": params, "timeout": timeout})
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr("altcoin_trend.exchanges.bybit.httpx.get", fake_get)
+
+    assert adapter.list_usdt_perp_symbols() == ["SOLUSDT", "ARBUSDT"]
+    assert calls == [
+        {
+            "url": "https://api.bybit.com/v5/market/instruments-info",
+            "params": {"category": "linear", "limit": 1000},
+            "timeout": 20,
+        },
+        {
+            "url": "https://api.bybit.com/v5/market/instruments-info",
+            "params": {"category": "linear", "limit": 1000, "cursor": "next"},
+            "timeout": 20,
+        },
+    ]
+    assert all(response.raise_called for response in responses)
+
+
+def test_bybit_list_usdt_perp_symbols_raises_for_nonzero_retcode(monkeypatch):
+    adapter = BybitPublicAdapter()
+
+    monkeypatch.setattr(
+        "altcoin_trend.exchanges.bybit.httpx.get",
+        lambda *args, **kwargs: _FakeResponse({"retCode": 10001, "retMsg": "bad request", "result": {}}),
+    )
+
+    with pytest.raises(ValueError, match="Bybit instruments request failed: retCode=10001 retMsg=bad request"):
+        adapter.list_usdt_perp_symbols()
 
 
 def test_bybit_kline_ws_parser_returns_closed_bar():

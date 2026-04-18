@@ -33,7 +33,12 @@ class BinancePublicAdapter:
     base_url = "https://fapi.binance.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
-        raise NotImplementedError("BinancePublicAdapter does not implement live symbol listing")
+        response = httpx.get(f"{self.base_url}/fapi/v1/exchangeInfo", timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Malformed Binance exchange info response: payload must be a mapping")
+        return [instrument.symbol for instrument in self.parse_exchange_info(payload)]
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
         response = httpx.get(
@@ -129,12 +134,15 @@ class BinancePublicAdapter:
         required_fields = ("s", "i", "t", "o", "h", "l", "c", "v", "q", "x")
         if any(field not in kline for field in required_fields):
             return None
-        if _nonempty_str(kline.get("s")) is None or kline.get("i") != "1m" or not isinstance(kline.get("x"), bool):
+        parsed_symbol = _nonempty_str(kline.get("s"))
+        if parsed_symbol is None or kline.get("i") != "1m" or not isinstance(kline.get("x"), bool):
+            return None
+        if symbol is not None and symbol.upper() != parsed_symbol.upper():
             return None
         try:
             return MarketBar1m(
                 exchange=self.exchange,
-                symbol=_nonempty_str(kline["s"]) or "",
+                symbol=parsed_symbol,
                 ts=utc_from_ms(int(kline["t"])),
                 open=_finite_float(kline["o"]),
                 high=_finite_float(kline["h"]),

@@ -24,7 +24,30 @@ class BybitPublicAdapter:
     base_url = "https://api.bybit.com"
 
     def list_usdt_perp_symbols(self) -> list[str]:
-        raise NotImplementedError("BybitPublicAdapter does not implement live symbol listing")
+        instruments: list[Instrument] = []
+        cursor: str | None = None
+        while True:
+            params = {"category": "linear", "limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            response = httpx.get(f"{self.base_url}/v5/market/instruments-info", params=params, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Malformed Bybit instruments response: payload must be a mapping")
+            ret_code = payload.get("retCode")
+            ret_msg = payload.get("retMsg")
+            if ret_code != 0:
+                raise ValueError(f"Bybit instruments request failed: retCode={ret_code} retMsg={ret_msg}")
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise ValueError("Malformed Bybit instruments response: missing result mapping")
+            instruments.extend(self.parse_instruments_info(payload))
+            next_cursor = result.get("nextPageCursor")
+            if not isinstance(next_cursor, str) or not next_cursor.strip():
+                break
+            cursor = next_cursor
+        return [instrument.symbol for instrument in instruments]
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
         response = httpx.get(

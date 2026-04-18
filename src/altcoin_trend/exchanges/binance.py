@@ -3,6 +3,8 @@ from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
 
 def _filter_value(filters: list[dict], filter_type: str, key: str) -> float | None:
     for item in filters:
+        if not isinstance(item, dict):
+            continue
         if item.get("filterType") == filter_type and key in item:
             return float(item[key])
     return None

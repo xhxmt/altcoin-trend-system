@@ -77,6 +77,38 @@ def test_binance_exchange_info_parser_skips_bad_rows():
     assert instruments[0].symbol == "SOLUSDT"
 
 
+def test_binance_exchange_info_parser_skips_non_dict_filter_entries():
+    adapter = BinancePublicAdapter()
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": "SOLUSDT",
+                "pair": "SOLUSDT",
+                "contractType": "PERPETUAL",
+                "status": "TRADING",
+                "baseAsset": "SOL",
+                "quoteAsset": "USDT",
+                "onboardDate": 1710000000000,
+                "filters": [
+                    "not-a-dict",
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.0100"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ],
+            }
+        ]
+    }
+
+    instruments = adapter.parse_exchange_info(payload)
+
+    assert len(instruments) == 1
+    instrument = instruments[0]
+    assert instrument.tick_size == 0.01
+    assert instrument.step_size == 0.1
+    assert instrument.min_notional == 5.0
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 

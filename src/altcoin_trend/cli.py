@@ -2,6 +2,7 @@ import typer
 
 from altcoin_trend.config import load_settings
 from altcoin_trend.db import build_engine, run_all_migrations
+from altcoin_trend.scheduler import run_once_pipeline
 
 app = typer.Typer(help="Altcoin trend system CLI")
 
@@ -30,7 +31,8 @@ def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -
 
 @app.command("run-once")
 def run_once() -> None:
-    typer.echo("Run-once scoring is wired in Task 9")
+    result = run_once_pipeline()
+    typer.echo(f"Run once status={result.status} message={result.message}")
 
 
 @app.command("daemon")
@@ -49,7 +51,11 @@ def rank(
 
 @app.command("status")
 def status() -> None:
-    typer.echo("Status command is wired in Task 9")
+    settings = load_settings()
+    typer.echo(
+        f"Status: configured exchanges={','.join(settings.exchanges)} "
+        f"interval={settings.signal_interval_seconds}s"
+    )
 
 
 @app.command("alerts")
@@ -59,4 +65,5 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
 
 @app.command("explain")
 def explain(symbol: str, exchange: str = typer.Option(..., "--exchange")) -> None:
-    typer.echo(f"Explain requested for {exchange}:{symbol.upper()}")
+    typer.echo(f"{exchange}:{symbol.upper()}")
+    typer.echo("Score: unavailable until feature snapshots exist")

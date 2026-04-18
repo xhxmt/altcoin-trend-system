@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+
 from typer.testing import CliRunner
 
 from altcoin_trend.cli import app
 from altcoin_trend.config import AppSettings
+from altcoin_trend.scheduler import RunOnceResult
 
 
 def test_cli_help_lists_mvp_commands():
@@ -28,3 +31,42 @@ def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
 
     assert result.exit_code == 0
     assert "Bootstrap requested lookback_days=30 exchanges=binance,bybit quote=USDT" in result.output
+
+
+def test_cli_explain_uses_requested_exchange_and_symbol():
+    result = CliRunner().invoke(app, ["explain", "solusdt", "--exchange", "binance"])
+
+    assert result.exit_code == 0
+    assert "binance:SOLUSDT" in result.output
+
+
+def test_cli_rank_echoes_scope_and_limit():
+    result = CliRunner().invoke(app, ["rank", "--exchange", "bybit", "--limit", "5"])
+
+    assert result.exit_code == 0
+    assert "scope=bybit" in result.output
+    assert "limit=5" in result.output
+
+
+def test_cli_run_once_reports_pipeline_status(monkeypatch):
+    monkeypatch.setattr(
+        "altcoin_trend.cli.run_once_pipeline",
+        lambda: RunOnceResult(datetime(2024, 1, 1, tzinfo=timezone.utc), "healthy", "ok"),
+    )
+
+    result = CliRunner().invoke(app, ["run-once"])
+
+    assert result.exit_code == 0
+    assert "Run once status=healthy message=ok" in result.output
+
+
+def test_cli_status_reports_loaded_settings(monkeypatch):
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_settings",
+        lambda: AppSettings(default_exchanges="binance,bybit", signal_interval_seconds=90),
+    )
+
+    result = CliRunner().invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Status: configured exchanges=binance,bybit interval=90s" in result.output

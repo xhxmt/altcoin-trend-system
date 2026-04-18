@@ -50,7 +50,7 @@ class BinancePublicAdapter:
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, list):
-            return []
+            raise ValueError("Malformed Binance klines response: payload must be a list")
         return self.parse_rest_klines(symbol, payload)
 
     def parse_rest_klines(self, symbol: str, rows: list[list]) -> list[MarketBar1m]:

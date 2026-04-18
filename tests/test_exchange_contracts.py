@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 
@@ -267,6 +269,75 @@ def test_binance_kline_ws_parser_rejects_nonfinite_numeric_values():
     assert adapter.parse_kline_message(payload) is None
 
 
+class _FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload
+        self.raise_called = False
+
+    def raise_for_status(self):
+        self.raise_called = True
+
+    def json(self):
+        return self.payload
+
+
+def test_binance_fetch_klines_1m_calls_http_and_parses_rows(monkeypatch):
+    adapter = BinancePublicAdapter()
+    captured = {}
+    response = _FakeResponse(
+        [
+            [
+                1710000000000,
+                "100.0",
+                "102.0",
+                "99.5",
+                "101.0",
+                "1234.5",
+                1710000059999,
+                "124000.5",
+                222,
+                "600.0",
+                "60600.0",
+                "0",
+            ]
+        ]
+    )
+
+    def fake_get(url, params, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", fake_get)
+
+    bars = adapter.fetch_klines_1m("SOLUSDT", 1, 2)
+
+    assert captured == {
+        "url": "https://fapi.binance.com/fapi/v1/klines",
+        "params": {
+            "symbol": "SOLUSDT",
+            "interval": "1m",
+            "startTime": 1,
+            "endTime": 2,
+            "limit": 1500,
+        },
+        "timeout": 20,
+    }
+    assert response.raise_called is True
+    assert bars[0].symbol == "SOLUSDT"
+    assert bars[0].close == 101.0
+
+
+def test_binance_fetch_klines_1m_rejects_malformed_payload(monkeypatch):
+    adapter = BinancePublicAdapter()
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", lambda *args, **kwargs: _FakeResponse({"bad": "payload"}))
+
+    with pytest.raises(ValueError, match="Malformed Binance klines response"):
+        adapter.fetch_klines_1m("SOLUSDT", 1, 2)
+
+
 def test_bybit_instruments_parser_returns_usdt_perp_instrument():
     adapter = BybitPublicAdapter()
 
@@ -488,3 +559,58 @@ def test_bybit_kline_ws_parser_returns_none_for_bad_scalar_values():
     }
 
     assert adapter.parse_kline_message(payload) is None
+
+
+def test_bybit_fetch_klines_1m_calls_http_and_returns_ascending_bars(monkeypatch):
+    adapter = BybitPublicAdapter()
+    captured = {}
+    response = _FakeResponse(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    ["1710000060000", "101.0", "103.0", "100.0", "102.0", "2000.0", "204000.0"],
+                    ["1710000000000", "100.0", "102.0", "99.5", "101.0", "1234.5", "124000.5"],
+                ]
+            },
+        }
+    )
+
+    def fake_get(url, params, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr("altcoin_trend.exchanges.bybit.httpx.get", fake_get)
+
+    bars = adapter.fetch_klines_1m("SOLUSDT", 1, 2)
+
+    assert captured == {
+        "url": "https://api.bybit.com/v5/market/kline",
+        "params": {
+            "category": "linear",
+            "symbol": "SOLUSDT",
+            "interval": "1",
+            "start": 1,
+            "end": 2,
+            "limit": 1000,
+        },
+        "timeout": 20,
+    }
+    assert response.raise_called is True
+    assert [bar.ts for bar in bars] == sorted(bar.ts for bar in bars)
+    assert [bar.close for bar in bars] == [101.0, 102.0]
+
+
+def test_bybit_fetch_klines_1m_raises_for_nonzero_retcode(monkeypatch):
+    adapter = BybitPublicAdapter()
+
+    monkeypatch.setattr(
+        "altcoin_trend.exchanges.bybit.httpx.get",
+        lambda *args, **kwargs: _FakeResponse({"retCode": 10001, "retMsg": "bad request", "result": {}}),
+    )
+
+    with pytest.raises(ValueError, match="Bybit kline request failed: retCode=10001 retMsg=bad request"):
+        adapter.fetch_klines_1m("SOLUSDT", 1, 2)

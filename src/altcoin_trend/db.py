@@ -1,5 +1,6 @@
 from importlib import resources
 from pathlib import Path
+import re
 from typing import Iterable
 
 from sqlalchemy import Engine, create_engine, text
@@ -9,6 +10,7 @@ from altcoin_trend.config import AppSettings
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS_PACKAGE = "altcoin_trend.migrations"
+_SAFE_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def build_engine(settings: AppSettings) -> Engine:
@@ -31,7 +33,20 @@ def insert_rows(engine: Engine, table_name: str, rows: Iterable[dict]) -> int:
     if not rows:
         return 0
 
+    table_parts = table_name.split(".")
+    if len(table_parts) not in (1, 2) or any(_SAFE_IDENTIFIER_RE.fullmatch(part) is None for part in table_parts):
+        raise ValueError(f"Invalid table name: {table_name}")
+
+    first_row_keys = set(rows[0].keys())
+    if not first_row_keys:
+        raise ValueError("Rows must contain at least one column")
+    for row in rows[1:]:
+        if set(row.keys()) != first_row_keys:
+            raise ValueError("All rows must have the same key set")
+
     columns = list(rows[0].keys())
+    if any(not isinstance(column, str) or _SAFE_IDENTIFIER_RE.fullmatch(column) is None for column in columns):
+        raise ValueError(f"Invalid column name in rows for table: {table_name}")
     column_sql = ", ".join(columns)
     placeholder_sql = ", ".join(f":{column}" for column in columns)
     statement = text(f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholder_sql})")

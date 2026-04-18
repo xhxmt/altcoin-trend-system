@@ -41,10 +41,23 @@ class BybitPublicAdapter:
         )
         response.raise_for_status()
         payload = response.json()
-        rows = payload.get("result", {}).get("list", []) if isinstance(payload, dict) else []
+        if not isinstance(payload, dict):
+            raise ValueError("Malformed Bybit klines response: payload must be a mapping")
+
+        ret_code = payload.get("retCode")
+        ret_msg = payload.get("retMsg")
+        if ret_code != 0:
+            raise ValueError(f"Bybit kline request failed: retCode={ret_code} retMsg={ret_msg}")
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("Malformed Bybit klines response: missing result mapping")
+        rows = result.get("list", [])
         if not isinstance(rows, list):
-            return []
-        return self.parse_rest_klines(symbol, rows)
+            raise ValueError("Malformed Bybit klines response: result.list must be a list")
+
+        bars = self.parse_rest_klines(symbol, rows)
+        return sorted(bars, key=lambda bar: bar.ts)
 
     def parse_rest_klines(self, symbol: str, rows: list[list[str]]) -> list[MarketBar1m]:
         bars: list[MarketBar1m] = []

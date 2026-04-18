@@ -11,6 +11,9 @@ mkdir -p ~/.config/acts
 cp config/acts.env.example ~/.config/acts/acts.env
 ```
 
+`AppSettings` loads `~/.config/acts/acts.env` automatically, and direct `ACTS_*`
+environment variables still override values from that file.
+
 ## CLI
 
 ```bash

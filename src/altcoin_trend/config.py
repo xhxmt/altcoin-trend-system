@@ -3,12 +3,12 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ENV_FILE = Path.home() / ".config" / "acts" / "acts.env"
 
 
 class AppSettings(BaseSettings):
     database_url: str = "postgresql+psycopg://tfisher@/altcoin_trend"
-    output_root: str = str(_PROJECT_ROOT / "artifacts")
+    output_root: str = "/home/tfisher/altcoin-trend-system/artifacts"
     default_exchanges: str = "binance,bybit"
     quote_asset: str = "USDT"
     min_quote_volume_24h: float = 5_000_000
@@ -21,7 +21,11 @@ class AppSettings(BaseSettings):
     symbol_allowlist: str = ""
     symbol_blocklist: str = ""
 
-    model_config = SettingsConfigDict(env_prefix="ACTS_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="ACTS_",
+        env_file=_DEFAULT_ENV_FILE,
+        extra="ignore",
+    )
 
     @property
     def artifacts_dir(self) -> Path:

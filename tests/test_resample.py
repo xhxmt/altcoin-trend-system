@@ -184,3 +184,34 @@ def test_resample_market_1m_sorts_by_timestamp_before_resampling():
 
     assert result.iloc[0]["open"] == 100.0
     assert result.iloc[0]["close"] == 101.25
+
+
+def test_resample_market_1m_drops_bucket_when_positional_ohlc_is_missing():
+    frame = pd.DataFrame(
+        [
+            {
+                "ts": "2024-03-01T00:00:00Z",
+                "open": None,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+                "trade_count": 1,
+            },
+            {
+                "ts": "2024-03-01T00:01:00Z",
+                "open": 100.5,
+                "high": 102.0,
+                "low": 100.0,
+                "close": None,
+                "volume": 20.0,
+                "quote_volume": 2000.0,
+                "trade_count": 2,
+            },
+        ]
+    )
+
+    result = resample_market_1m(frame, "5m")
+
+    assert result.empty

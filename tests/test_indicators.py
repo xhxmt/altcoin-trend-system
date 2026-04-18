@@ -52,7 +52,7 @@ def test_adx_returns_same_length_and_non_null_values():
     result = adx(frame, window=3)
 
     assert len(result) == len(frame)
-    assert result.notna().any()
+    assert result.notna().all()
 
 
 def test_true_range_uses_first_row_high_low_when_previous_close_missing():
@@ -65,3 +65,18 @@ def test_true_range_uses_first_row_high_low_when_previous_close_missing():
     )
 
     assert list(true_range(frame)) == [3.0]
+
+
+def test_indicator_functions_return_empty_series_for_empty_input():
+    frame = pd.DataFrame(columns=["high", "low", "close"])
+
+    tr = true_range(frame)
+    atr_result = atr(frame, window=3)
+    adx_result = adx(frame, window=3)
+
+    assert tr.empty
+    assert atr_result.empty
+    assert adx_result.empty
+    assert tr.dtype == float
+    assert atr_result.dtype == float
+    assert adx_result.dtype == float

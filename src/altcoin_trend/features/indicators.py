@@ -10,7 +10,14 @@ def add_ema(frame: pd.DataFrame, column: str, span: int, output: str) -> pd.Data
     return result
 
 
+def _empty_float_series(frame: pd.DataFrame) -> pd.Series:
+    return pd.Series(dtype=float, index=frame.index)
+
+
 def true_range(frame: pd.DataFrame) -> pd.Series:
+    if frame.empty:
+        return _empty_float_series(frame)
+
     high = frame["high"].astype(float)
     low = frame["low"].astype(float)
     close = frame["close"].astype(float)
@@ -26,10 +33,15 @@ def true_range(frame: pd.DataFrame) -> pd.Series:
 
 
 def atr(frame: pd.DataFrame, window: int = 14) -> pd.Series:
+    if frame.empty:
+        return _empty_float_series(frame)
     return true_range(frame).rolling(window=window, min_periods=1).mean()
 
 
 def adx(frame: pd.DataFrame, window: int = 14) -> pd.Series:
+    if frame.empty:
+        return _empty_float_series(frame)
+
     high = frame["high"].astype(float)
     low = frame["low"].astype(float)
     close = frame["close"].astype(float)

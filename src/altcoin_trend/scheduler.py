@@ -26,20 +26,44 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _component_scores(group: pd.DataFrame) -> dict[str, float]:
+def _component_scores(group: pd.DataFrame, timeframe_features: dict[str, Any] | None = None) -> dict[str, float]:
+    timeframe_features = timeframe_features or {}
     latest = group.iloc[-1]
     first = group.iloc[0]
+    latest_close = float(latest["close"])
     if first["close"] == 0:
         return_pct = 0.0
     else:
-        return_pct = ((latest["close"] / first["close"]) - 1.0) * 100
+        return_pct = ((latest_close / first["close"]) - 1.0) * 100
 
     avg_quote_volume = float(group["quote_volume"].mean()) if not group.empty else 0.0
     volume_ratio = float(latest["quote_volume"]) / avg_quote_volume if avg_quote_volume > 0 else 0.0
+    volume_ratio_4h = timeframe_features.get("volume_ratio_4h")
+    effective_volume_ratio = float(volume_ratio_4h) if volume_ratio_4h is not None else volume_ratio
+
+    ema20_4h = timeframe_features.get("ema20_4h")
+    ema60_4h = timeframe_features.get("ema60_4h")
+    adx14_4h = timeframe_features.get("adx14_4h")
+    breakout_20d = bool(timeframe_features.get("breakout_20d"))
+
+    trend_score = 20.0
+    if ema20_4h is not None and latest_close > float(ema20_4h):
+        trend_score += 25.0
+        if float(ema20_4h) > 0:
+            trend_score += max(0.0, min(15.0, ((latest_close / float(ema20_4h)) - 1.0) * 200.0))
+    if ema20_4h is not None and ema60_4h is not None and float(ema20_4h) > float(ema60_4h):
+        trend_score += 25.0
+    if adx14_4h is not None:
+        trend_score += max(0.0, min(20.0, float(adx14_4h) / 40.0 * 20.0))
+    trend_score += max(0.0, min(10.0, return_pct / 3.0))
+
+    volume_breakout_score = max(0.0, min(80.0, effective_volume_ratio * 40.0))
+    if breakout_20d:
+        volume_breakout_score += 20.0
 
     return {
-        "trend_score": max(0.0, min(100.0, 50.0 + return_pct * 2.0)),
-        "volume_breakout_score": max(0.0, min(100.0, volume_ratio * 50.0)),
+        "trend_score": max(0.0, min(100.0, trend_score)),
+        "volume_breakout_score": max(0.0, min(100.0, volume_breakout_score)),
         "relative_strength_score": 50.0,
         "derivatives_score": 50.0,
         "quality_score": max(0.0, min(100.0, len(group) / 60 * 100.0)),
@@ -118,8 +142,8 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
     for asset_id, group in working.sort_values(["asset_id", "ts"]).groupby("asset_id"):
         group = add_ema(group, column="close", span=20, output="ema20_1m")
         latest = group.iloc[-1]
-        scores = _component_scores(group)
         timeframe_features = _higher_timeframe_features(group)
+        scores = _component_scores(group, timeframe_features)
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
         feature_rows.append(
             {

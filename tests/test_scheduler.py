@@ -106,6 +106,44 @@ def test_build_snapshot_rows_includes_higher_timeframe_features():
     assert isinstance(row["breakout_20d"], bool)
 
 
+def test_build_snapshot_rows_scores_aligned_4h_trend_above_fading_move():
+    snapshot_ts = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    rows = []
+    for minute in range(24 * 60):
+        ts = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(minutes=minute)
+        strong_close = 100.0 + 20.0 * minute / (24 * 60 - 1)
+        if minute < 12 * 60:
+            fading_close = 100.0 + 40.0 * minute / (12 * 60)
+        else:
+            fading_close = 140.0 - 20.0 * (minute - 12 * 60) / (12 * 60 - 1)
+        for asset_id, symbol, close in (
+            (1, "STRONGUSDT", strong_close),
+            (2, "FADINGUSDT", fading_close),
+        ):
+            rows.append(
+                {
+                    "asset_id": asset_id,
+                    "exchange": "binance",
+                    "symbol": symbol,
+                    "base_asset": symbol.removesuffix("USDT"),
+                    "ts": ts,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 10.0,
+                    "quote_volume": 1000.0,
+                }
+            )
+    market_rows = pd.DataFrame(rows)
+
+    feature_rows, rank_rows = build_snapshot_rows(market_rows, snapshot_ts)
+    scores = {row["symbol"]: row["final_score"] for row in feature_rows}
+
+    assert scores["STRONGUSDT"] > scores["FADINGUSDT"]
+    assert rank_rows[0]["symbol"] == "STRONGUSDT"
+
+
 def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
     calls = []
 

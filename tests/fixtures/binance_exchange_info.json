@@ -1,0 +1,18 @@
+{
+  "symbols": [
+    {
+      "symbol": "SOLUSDT",
+      "pair": "SOLUSDT",
+      "contractType": "PERPETUAL",
+      "status": "TRADING",
+      "baseAsset": "SOL",
+      "quoteAsset": "USDT",
+      "onboardDate": 1710000000000,
+      "filters": [
+        {"filterType": "PRICE_FILTER", "tickSize": "0.0100"},
+        {"filterType": "LOT_SIZE", "stepSize": "0.1"},
+        {"filterType": "MIN_NOTIONAL", "notional": "5"}
+      ]
+    }
+  ]
+}

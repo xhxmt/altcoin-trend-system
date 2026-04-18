@@ -1,0 +1,17 @@
+{
+  "retCode": 0,
+  "result": {
+    "list": [
+      {
+        "symbol": "SOLUSDT",
+        "status": "Trading",
+        "baseCoin": "SOL",
+        "quoteCoin": "USDT",
+        "launchTime": "1710000000000",
+        "contractType": "LinearPerpetual",
+        "priceFilter": {"tickSize": "0.01"},
+        "lotSizeFilter": {"qtyStep": "0.1", "minNotionalValue": "5"}
+      }
+    ]
+  }
+}

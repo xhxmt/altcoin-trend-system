@@ -73,6 +73,7 @@ class BybitPublicAdapter:
         bars: list[MarketBar1m] = []
         next_start = start_ms
         while next_start <= end_ms:
+            request_end = min(next_start + 999 * 60_000, end_ms)
             response = httpx.get(
                 f"{self.base_url}/v5/market/kline",
                 params={
@@ -80,7 +81,7 @@ class BybitPublicAdapter:
                     "symbol": symbol,
                     "interval": "1",
                     "start": next_start,
-                    "end": end_ms,
+                    "end": request_end,
                     "limit": 1000,
                 },
                 timeout=20,

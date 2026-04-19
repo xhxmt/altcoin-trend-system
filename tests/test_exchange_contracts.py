@@ -292,6 +292,40 @@ def test_bybit_fetch_klines_1m_paginates_and_sorts(monkeypatch):
     assert all(call["limit"] == 1000 for call in calls)
 
 
+def test_bybit_fetch_klines_1m_queries_bounded_1000_minute_windows(monkeypatch):
+    adapter = BybitPublicAdapter()
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "list": [
+                        [str(calls[-1]["end"]), "1", "1", "1", "1", "10", "10"],
+                    ]
+                },
+            }
+
+    def fake_get(url, params, timeout):
+        calls.append(params.copy())
+        return Response()
+
+    monkeypatch.setattr("altcoin_trend.exchanges.bybit.httpx.get", fake_get)
+
+    adapter.fetch_klines_1m("SOLUSDT", start_ms=0, end_ms=2_000 * 60_000)
+
+    assert calls[0]["start"] == 0
+    assert calls[0]["end"] == 999 * 60_000
+    assert calls[1]["start"] == 1_000 * 60_000
+    assert calls[1]["end"] == 1_999 * 60_000
+    assert len(calls) == 2
+
+
 def test_binance_derivatives_parsers_normalize_funding_and_open_interest():
     adapter = BinancePublicAdapter()
 

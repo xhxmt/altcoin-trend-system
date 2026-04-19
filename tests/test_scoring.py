@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError, fields
 
 from altcoin_trend.features.scoring import ScoreInput, ScoreResult, compute_final_score, tier_for_score
 from altcoin_trend.signals.explain import build_explain_text
-from altcoin_trend.signals.ranking import rank_scores
+from altcoin_trend.signals.ranking import aggregate_rank_rows_by_symbol, rank_scores
 
 
 def test_scoreinput_and_scoreresult_public_fields_match_plan():
@@ -123,6 +123,24 @@ def test_rank_scores_orders_by_final_score_and_adds_scope_and_rank():
         {"symbol": "BBBUSDT", "final_score": 91.5},
         {"symbol": "CCCUSDT", "final_score": 80.0},
     ]
+
+
+def test_aggregate_rank_rows_by_symbol_uses_best_exchange_and_reorders_ranks():
+    rows = [
+        {"exchange": "binance", "symbol": "SOLUSDT", "final_score": 88.4, "rank": 1, "tier": "strong"},
+        {"exchange": "bybit", "symbol": "SOLUSDT", "final_score": 91.2, "rank": 2, "tier": "strong"},
+        {"symbol": "BTCUSDT", "final_score": 93.0, "rank": 3, "tier": "strong"},
+        {"exchange": "binance", "symbol": "ETHUSDT", "final_score": 79.5, "rank": 4, "tier": "watchlist"},
+    ]
+
+    aggregated = aggregate_rank_rows_by_symbol(rows)
+
+    assert [row["symbol"] for row in aggregated] == ["BTCUSDT", "SOLUSDT", "ETHUSDT"]
+    assert [row["rank"] for row in aggregated] == [1, 2, 3]
+    assert [row["exchange"] for row in aggregated] == ["unknown", "bybit", "binance"]
+    assert [row["exchange_count"] for row in aggregated] == [1, 2, 1]
+    assert [row["average_score"] for row in aggregated] == [93.0, 89.8, 79.5]
+    assert [row["final_score"] for row in aggregated] == [93.0, 91.2, 79.5]
 
 
 def test_build_explain_text_includes_key_fields():

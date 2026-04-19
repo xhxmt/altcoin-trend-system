@@ -11,6 +11,7 @@ from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.ingest.derivatives import bootstrap_derivatives
 from altcoin_trend.scheduler import load_explain_row, load_rank_rows, process_alerts, run_once_pipeline
 from altcoin_trend.signals.explain import build_explain_text
+from altcoin_trend.signals.ranking import aggregate_rank_rows_by_symbol
 from altcoin_trend.signals.telegram import TelegramClient
 
 app = typer.Typer(help="Altcoin trend system CLI")
@@ -84,17 +85,24 @@ def daemon() -> None:
 def rank(
     limit: int = typer.Option(30, "--limit", min=1),
     exchange: str | None = typer.Option(None, "--exchange"),
+    aggregate_symbols: bool = typer.Option(False, "--aggregate-symbols"),
 ) -> None:
     scope = exchange or "all"
     settings = load_settings()
     engine = build_engine(settings)
     rows = load_rank_rows(engine, rank_scope=scope, limit=limit)
+    if aggregate_symbols:
+        rows = aggregate_rank_rows_by_symbol(rows)
     if not rows:
         typer.echo(f"No rank snapshot found for scope={scope}")
         return
-    typer.echo(f"Rank snapshot scope={scope} limit={limit}")
+    typer.echo(f"Rank snapshot scope={scope} limit={limit} aggregate_symbols={aggregate_symbols}")
     for row in rows:
-        typer.echo(f"{row['rank']}. {row['symbol']} score={row['final_score']} tier={row['tier']}")
+        row_exchange = row.get("exchange") or "unknown"
+        line = f"{row['rank']}. {row_exchange}:{row['symbol']} score={row['final_score']} tier={row['tier']}"
+        if aggregate_symbols:
+            line += f" exchanges={row['exchange_count']} avg_score={row['average_score']}"
+        typer.echo(line)
 
 
 @app.command("status")

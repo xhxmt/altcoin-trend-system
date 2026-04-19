@@ -93,7 +93,13 @@ def test_cli_rank_echoes_scope_and_limit(monkeypatch):
     monkeypatch.setattr(
         "altcoin_trend.cli.load_rank_rows",
         lambda engine, rank_scope, limit: [
-            {"rank": 1, "symbol": "SOLUSDT", "final_score": 88.4, "tier": "strong"}
+            {
+                "rank": 1,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "final_score": 88.4,
+                "tier": "strong",
+            }
         ],
     )
 
@@ -102,7 +108,46 @@ def test_cli_rank_echoes_scope_and_limit(monkeypatch):
     assert result.exit_code == 0
     assert "scope=bybit" in result.output
     assert "limit=5" in result.output
-    assert "1. SOLUSDT score=88.4 tier=strong" in result.output
+    assert "aggregate_symbols=False" in result.output
+    assert "1. binance:SOLUSDT score=88.4 tier=strong" in result.output
+
+
+def test_cli_rank_can_aggregate_symbols(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_rank_rows",
+        lambda engine, rank_scope, limit: [
+            {
+                "rank": 1,
+                "exchange": "bybit",
+                "symbol": "SOLUSDT",
+                "final_score": 91.2,
+                "tier": "strong",
+            },
+            {
+                "rank": 2,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "final_score": 88.4,
+                "tier": "strong",
+            },
+            {
+                "rank": 3,
+                "exchange": "binance",
+                "symbol": "ETHUSDT",
+                "final_score": 79.5,
+                "tier": "watchlist",
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["rank", "--aggregate-symbols"])
+
+    assert result.exit_code == 0
+    assert "aggregate_symbols=True" in result.output
+    assert "1. bybit:SOLUSDT score=91.2 tier=strong exchanges=2 avg_score=89.8" in result.output
+    assert "2. binance:ETHUSDT score=79.5 tier=watchlist exchanges=1 avg_score=79.5" in result.output
 
 
 def test_cli_run_once_reports_pipeline_status(monkeypatch):

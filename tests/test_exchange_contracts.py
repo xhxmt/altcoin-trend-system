@@ -206,6 +206,92 @@ def test_binance_list_usdt_perp_symbols_fetches_exchange_info(monkeypatch):
     assert response.raise_called is True
 
 
+def test_binance_fetch_klines_1m_paginates_until_end(monkeypatch):
+    adapter = BinancePublicAdapter()
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    pages = [
+        [
+            [1000, "1", "1", "1", "1", "10", 0, "10", 1, "5", "5"],
+            [61000, "2", "2", "2", "2", "20", 0, "40", 2, "10", "20"],
+        ],
+        [
+            [121000, "3", "3", "3", "3", "30", 0, "90", 3, "15", "45"],
+        ],
+    ]
+
+    def fake_get(url, params, timeout):
+        calls.append(params.copy())
+        return Response(pages[len(calls) - 1])
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", fake_get)
+
+    bars = adapter.fetch_klines_1m("SOLUSDT", start_ms=1000, end_ms=181000)
+
+    assert [bar.ts.timestamp() for bar in bars] == [1.0, 61.0, 121.0]
+    assert [call["startTime"] for call in calls] == [1000, 121000]
+    assert all(call["limit"] == 1500 for call in calls)
+
+
+def test_bybit_fetch_klines_1m_paginates_and_sorts(monkeypatch):
+    adapter = BybitPublicAdapter()
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    pages = [
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    ["61000", "2", "2", "2", "2", "20", "40"],
+                    ["1000", "1", "1", "1", "1", "10", "10"],
+                ]
+            },
+        },
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    ["121000", "3", "3", "3", "3", "30", "90"],
+                ]
+            },
+        },
+    ]
+
+    def fake_get(url, params, timeout):
+        calls.append(params.copy())
+        return Response(pages[len(calls) - 1])
+
+    monkeypatch.setattr("altcoin_trend.exchanges.bybit.httpx.get", fake_get)
+
+    bars = adapter.fetch_klines_1m("SOLUSDT", start_ms=1000, end_ms=181000)
+
+    assert [bar.ts.timestamp() for bar in bars] == [1.0, 61.0, 121.0]
+    assert [call["start"] for call in calls] == [1000, 121000]
+    assert all(call["limit"] == 1000 for call in calls)
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 

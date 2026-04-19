@@ -44,22 +44,36 @@ class BinancePublicAdapter:
         return self.parse_exchange_info(payload)
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
-        response = httpx.get(
-            f"{self.base_url}/fapi/v1/klines",
-            params={
-                "symbol": symbol,
-                "interval": "1m",
-                "startTime": start_ms,
-                "endTime": end_ms,
-                "limit": 1500,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise ValueError("Malformed Binance klines response: payload must be a list")
-        return self.parse_rest_klines(symbol, payload)
+        bars: list[MarketBar1m] = []
+        next_start = start_ms
+        while next_start <= end_ms:
+            response = httpx.get(
+                f"{self.base_url}/fapi/v1/klines",
+                params={
+                    "symbol": symbol,
+                    "interval": "1m",
+                    "startTime": next_start,
+                    "endTime": end_ms,
+                    "limit": 1500,
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise ValueError("Malformed Binance klines response: payload must be a list")
+            page = self.parse_rest_klines(symbol, payload)
+            if not page:
+                break
+            bars.extend(page)
+            last_ms = int(page[-1].ts.timestamp() * 1000)
+            advanced_start = last_ms + 60_000
+            if advanced_start <= next_start:
+                break
+            next_start = advanced_start
+            if next_start >= end_ms:
+                break
+        return bars
 
     def parse_rest_klines(self, symbol: str, rows: list[list]) -> list[MarketBar1m]:
         bars: list[MarketBar1m] = []

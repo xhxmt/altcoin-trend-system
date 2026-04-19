@@ -53,36 +53,49 @@ class BybitPublicAdapter:
         return instruments
 
     def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[MarketBar1m]:
-        response = httpx.get(
-            f"{self.base_url}/v5/market/kline",
-            params={
-                "category": "linear",
-                "symbol": symbol,
-                "interval": "1",
-                "start": start_ms,
-                "end": end_ms,
-                "limit": 1000,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("Malformed Bybit klines response: payload must be a mapping")
+        bars: list[MarketBar1m] = []
+        next_start = start_ms
+        while next_start <= end_ms:
+            response = httpx.get(
+                f"{self.base_url}/v5/market/kline",
+                params={
+                    "category": "linear",
+                    "symbol": symbol,
+                    "interval": "1",
+                    "start": next_start,
+                    "end": end_ms,
+                    "limit": 1000,
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Malformed Bybit klines response: payload must be a mapping")
 
-        ret_code = payload.get("retCode")
-        ret_msg = payload.get("retMsg")
-        if ret_code != 0:
-            raise ValueError(f"Bybit kline request failed: retCode={ret_code} retMsg={ret_msg}")
+            ret_code = payload.get("retCode")
+            ret_msg = payload.get("retMsg")
+            if ret_code != 0:
+                raise ValueError(f"Bybit kline request failed: retCode={ret_code} retMsg={ret_msg}")
 
-        result = payload.get("result")
-        if not isinstance(result, dict):
-            raise ValueError("Malformed Bybit klines response: missing result mapping")
-        rows = result.get("list", [])
-        if not isinstance(rows, list):
-            raise ValueError("Malformed Bybit klines response: result.list must be a list")
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise ValueError("Malformed Bybit klines response: missing result mapping")
+            rows = result.get("list", [])
+            if not isinstance(rows, list):
+                raise ValueError("Malformed Bybit klines response: result.list must be a list")
 
-        bars = self.parse_rest_klines(symbol, rows)
+            page = sorted(self.parse_rest_klines(symbol, rows), key=lambda bar: bar.ts)
+            if not page:
+                break
+            bars.extend(page)
+            last_ms = int(page[-1].ts.timestamp() * 1000)
+            advanced_start = last_ms + 60_000
+            if advanced_start <= next_start:
+                break
+            next_start = advanced_start
+            if next_start >= end_ms:
+                break
         return sorted(bars, key=lambda bar: bar.ts)
 
     def parse_rest_klines(self, symbol: str, rows: list[list[str]]) -> list[MarketBar1m]:

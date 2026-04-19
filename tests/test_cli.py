@@ -19,6 +19,7 @@ def test_cli_help_lists_mvp_commands():
     assert "status" in result.output
     assert "alerts" in result.output
     assert "explain" in result.output
+    assert "backtest" in result.output
 
 
 def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
@@ -261,3 +262,56 @@ def test_cli_bootstrap_derivatives_reports_allowlist_selection_mode(monkeypatch)
 
     assert result.exit_code == 0
     assert "Bootstrap derivatives selection mode=allowlist allowlist=2 blocklist=1" in result.output
+
+
+def test_cli_backtest_prints_summary(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.run_signal_backtest",
+        lambda engine, start, end, min_score, horizons, high_value_only, limit: type(
+            "Summary",
+            (),
+            {
+                "signal_count": 2,
+                "average_score": 85.0,
+                "tier_counts": {"strong": 1, "watchlist": 1},
+                "exchange_counts": {"binance": 1, "bybit": 1},
+                "horizon_stats": {
+                    "1h": type("Stats", (), {"avg_return": 0.025, "win_rate": 50.0})(),
+                    "4h": type("Stats", (), {"avg_return": 0.25, "win_rate": 100.0})(),
+                },
+                "top_signals": [
+                    {"exchange": "binance", "symbol": "SOLUSDT", "final_score": 90.0, "tier": "strong"},
+                    {"exchange": "bybit", "symbol": "ETHUSDT", "final_score": 80.0, "tier": "watchlist"},
+                ],
+            },
+        )(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--from",
+            "2026-01-01T00:00:00",
+            "--to",
+            "2026-01-03T00:00:00",
+            "--min-score",
+            "80",
+            "--horizons",
+            "1h,4h",
+            "--high-value-only",
+            "--limit",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "signals=2" in result.output
+    assert "average_score=85.0" in result.output
+    assert "Tier counts: strong=1 watchlist=1" in result.output
+    assert "Exchange counts: binance=1 bybit=1" in result.output
+    assert "1h avg_return=2.50% win_rate=50.00%" in result.output
+    assert "4h avg_return=25.00% win_rate=100.00%" in result.output
+    assert "1. binance:SOLUSDT score=90.0 tier=strong" in result.output

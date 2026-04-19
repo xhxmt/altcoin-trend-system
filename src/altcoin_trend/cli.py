@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import typer
 
+from altcoin_trend.backtest import parse_horizons, run_signal_backtest
 from altcoin_trend.config import load_settings
 from altcoin_trend.daemon import main as daemon_main
 from altcoin_trend.db import build_engine, run_all_migrations
@@ -27,6 +28,22 @@ def _selection_mode_text(settings) -> str:
     blocklist_count = len(settings.blocklist_symbols)
     mode = "full-market" if allowlist_count == 0 else "allowlist"
     return f"selection mode={mode} allowlist={allowlist_count} blocklist={blocklist_count}"
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"Invalid ISO datetime: {value}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "none"
+    return " ".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
 @app.command("init-db")
@@ -144,6 +161,54 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
         telegram_client=telegram_client,
     )
     typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={since}")
+
+
+@app.command("backtest")
+def backtest(
+    from_ts: str = typer.Option(..., "--from"),
+    to_ts: str = typer.Option(..., "--to"),
+    min_score: float = typer.Option(0.0, "--min-score"),
+    horizons: str = typer.Option("1h,4h,24h,1d", "--horizons"),
+    high_value_only: bool = typer.Option(False, "--high-value-only"),
+    limit: int = typer.Option(10, "--limit", min=1),
+) -> None:
+    start = _parse_iso_datetime(from_ts)
+    end = _parse_iso_datetime(to_ts)
+    if start >= end:
+        raise typer.BadParameter("--from must be earlier than --to")
+
+    settings = load_settings()
+    engine = build_engine(settings)
+    summary = run_signal_backtest(
+        engine=engine,
+        start=start,
+        end=end,
+        min_score=min_score,
+        horizons=parse_horizons(horizons),
+        high_value_only=high_value_only,
+        limit=limit,
+    )
+    if summary.signal_count == 0:
+        typer.echo("No signals found for requested filters")
+        return
+
+    typer.echo(
+        f"Backtest from={start.isoformat()} to={end.isoformat()} "
+        f"signals={summary.signal_count} average_score={summary.average_score}"
+    )
+    typer.echo(f"Tier counts: {_format_counts(summary.tier_counts)}")
+    typer.echo(f"Exchange counts: {_format_counts(summary.exchange_counts)}")
+    for horizon, stats in summary.horizon_stats.items():
+        typer.echo(
+            f"{horizon} avg_return={stats.avg_return * 100:.2f}% "
+            f"win_rate={stats.win_rate:.2f}%"
+        )
+    typer.echo("Top signals:")
+    for index, signal in enumerate(summary.top_signals, start=1):
+        typer.echo(
+            f"{index}. {signal.get('exchange', 'unknown')}:{signal.get('symbol', 'unknown')} "
+            f"score={signal.get('final_score')} tier={signal.get('tier', 'rejected')}"
+        )
 
 
 @app.command("explain")

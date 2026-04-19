@@ -47,6 +47,11 @@ def build_explain_text(row: Mapping[str, Any] | Any) -> str:
         f"RS vs ETH 7d: {_format_optional_float(_get(row, 'rs_eth_7d', None))}",
         f"RS vs BTC 30d: {_format_optional_float(_get(row, 'rs_btc_30d', None))}",
         f"RS vs ETH 30d: {_format_optional_float(_get(row, 'rs_eth_30d', None))}",
+        "Derivatives:",
+        f"OI delta 1h: {_format_optional_float(_get(row, 'oi_delta_1h', None))}",
+        f"OI delta 4h: {_format_optional_float(_get(row, 'oi_delta_4h', None))}",
+        f"Funding z-score: {_format_optional_float(_get(row, 'funding_zscore', None))}",
+        f"Taker buy/sell ratio: {_format_optional_float(_get(row, 'taker_buy_sell_ratio', None))}",
     ]
     if veto:
         lines.append(f"Veto: {', '.join(veto)}")

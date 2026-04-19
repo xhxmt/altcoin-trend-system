@@ -237,3 +237,30 @@ def test_build_explain_text_includes_relative_strength_values_and_missing_as_na(
     assert "RS vs ETH 7d: n/a" in text
     assert "RS vs BTC 30d: -1.25" in text
     assert "RS vs ETH 30d: 4.00" in text
+
+
+def test_build_explain_text_includes_derivatives_values_and_missing_as_na():
+    text = build_explain_text(
+        {
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "final_score": 88.4,
+            "tier": "strong",
+            "trend_score": 92.0,
+            "volume_breakout_score": 81.0,
+            "relative_strength_score": 77.5,
+            "derivatives_score": 64.0,
+            "quality_score": 90.0,
+            "oi_delta_1h": 4.321,
+            "oi_delta_4h": None,
+            "funding_zscore": 1.25,
+            "taker_buy_sell_ratio": 1.4,
+            "veto_reason_codes": [],
+        }
+    )
+
+    assert "Derivatives:" in text
+    assert "OI delta 1h: 4.32" in text
+    assert "OI delta 4h: n/a" in text
+    assert "Funding z-score: 1.25" in text
+    assert "Taker buy/sell ratio: 1.40" in text

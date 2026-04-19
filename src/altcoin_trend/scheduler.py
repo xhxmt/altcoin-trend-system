@@ -9,6 +9,7 @@ import pandas as pd
 from sqlalchemy import Engine, text
 
 from altcoin_trend.db import insert_rows
+from altcoin_trend.features.derivatives import compute_derivatives_features
 from altcoin_trend.features.indicators import add_ema, adx, atr
 from altcoin_trend.features.relative_strength import RelativeStrengthFeature, build_relative_strength_features
 from altcoin_trend.features.resample import resample_market_1m
@@ -33,6 +34,7 @@ def _component_scores(
     group: pd.DataFrame,
     timeframe_features: dict[str, Any] | None = None,
     relative_strength_score: float = 50.0,
+    derivatives_score: float = 50.0,
 ) -> dict[str, float]:
     timeframe_features = timeframe_features or {}
     latest = group.iloc[-1]
@@ -86,7 +88,7 @@ def _component_scores(
         "trend_score": max(0.0, min(100.0, trend_score) - extension_penalty),
         "volume_breakout_score": max(0.0, min(100.0, volume_breakout_score)),
         "relative_strength_score": max(0.0, min(100.0, float(relative_strength_score))),
-        "derivatives_score": 50.0,
+        "derivatives_score": max(0.0, min(100.0, float(derivatives_score))),
         "quality_score": max(0.0, min(100.0, len(group) / 60 * 100.0)),
     }
 
@@ -195,7 +197,13 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 relative_strength_score=50.0,
             ),
         )
-        scores = _component_scores(group, timeframe_features, relative_strength.relative_strength_score)
+        derivatives = compute_derivatives_features(group)
+        scores = _component_scores(
+            group,
+            timeframe_features,
+            relative_strength.relative_strength_score,
+            derivatives.derivatives_score,
+        )
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
         feature_rows.append(
             {
@@ -211,6 +219,10 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "rs_eth_7d": relative_strength.rs_eth_7d,
                 "rs_btc_30d": relative_strength.rs_btc_30d,
                 "rs_eth_30d": relative_strength.rs_eth_30d,
+                "oi_delta_1h": derivatives.oi_delta_1h,
+                "oi_delta_4h": derivatives.oi_delta_4h,
+                "funding_zscore": derivatives.funding_zscore,
+                "taker_buy_sell_ratio": derivatives.taker_buy_sell_ratio,
                 "trend_score": scores["trend_score"],
                 "volume_breakout_score": scores["volume_breakout_score"],
                 "relative_strength_score": scores["relative_strength_score"],
@@ -354,6 +366,10 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
             fs.rs_eth_7d,
             fs.rs_btc_30d,
             fs.rs_eth_30d,
+            fs.oi_delta_1h,
+            fs.oi_delta_4h,
+            fs.funding_zscore,
+            fs.taker_buy_sell_ratio,
             fs.final_score,
             COALESCE(r.tier, 'rejected') AS tier,
             COALESCE(r.primary_reason, '') AS primary_reason,

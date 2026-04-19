@@ -190,6 +190,39 @@ def test_build_snapshot_rows_uses_data_driven_relative_strength():
     assert rank_rows[0]["symbol"] == "SOLUSDT"
 
 
+def test_build_snapshot_rows_uses_data_driven_derivatives_score():
+    snapshot_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 50,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "base_asset": "SOL",
+                "ts": pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(hours=hour),
+                "open": 100.0 + hour,
+                "high": 101.0 + hour,
+                "low": 99.0 + hour,
+                "close": 100.0 + hour * 3,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+                "taker_buy_quote": 560.0,
+                "open_interest": 1000.0 + hour * 100.0,
+                "funding_rate": 0.0001,
+            }
+            for hour in range(5)
+        ]
+    )
+
+    feature_rows, _ = build_snapshot_rows(market_rows, snapshot_ts)
+    row = feature_rows[0]
+
+    assert row["oi_delta_1h"] > 0
+    assert row["oi_delta_4h"] > 0
+    assert row["taker_buy_sell_ratio"] > 1.0
+    assert row["derivatives_score"] > 50.0
+
+
 def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():
     snapshot_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
     rows = []

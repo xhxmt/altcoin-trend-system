@@ -143,3 +143,23 @@ def test_cli_alerts_processes_pending_alerts(monkeypatch):
 
     assert result.exit_code == 0
     assert "Alerts processed inserted=2 sent=0 since=1h" in result.output
+
+
+def test_cli_bootstrap_derivatives_uses_loaded_settings(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_settings",
+        lambda: AppSettings(default_exchanges="binance,bybit", quote_asset="USDT"),
+    )
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.bootstrap_derivatives",
+        lambda adapter, engine, settings, lookback_days, now: calls.append((adapter.exchange, lookback_days)) or 7,
+    )
+
+    result = CliRunner().invoke(app, ["bootstrap-derivatives", "--lookback-days", "31"])
+
+    assert result.exit_code == 0
+    assert calls == [("binance", 31), ("bybit", 31)]
+    assert "Derivatives bootstrap binance updates=7" in result.output
+    assert "Derivatives bootstrap bybit updates=7" in result.output

@@ -8,6 +8,7 @@ from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import bootstrap_exchange
+from altcoin_trend.ingest.derivatives import bootstrap_derivatives
 from altcoin_trend.scheduler import load_explain_row, load_rank_rows, process_alerts, run_once_pipeline
 from altcoin_trend.signals.explain import build_explain_text
 from altcoin_trend.signals.telegram import TelegramClient
@@ -48,6 +49,22 @@ def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -
             f"bars_written={result.bars_written}"
         )
     typer.echo(f"Bootstrap completed exchanges={len(settings.exchanges)} bars_written={total_bars}")
+
+
+@app.command("bootstrap-derivatives")
+def bootstrap_derivatives_command(lookback_days: int = typer.Option(31, "--lookback-days", min=1)) -> None:
+    settings = load_settings()
+    engine = build_engine(settings)
+    now = datetime.now(timezone.utc)
+    for exchange in settings.exchanges:
+        if exchange == "binance":
+            adapter = BinancePublicAdapter()
+        elif exchange == "bybit":
+            adapter = BybitPublicAdapter()
+        else:
+            raise typer.BadParameter(f"Unsupported exchange: {exchange}")
+        updates = bootstrap_derivatives(adapter=adapter, engine=engine, settings=settings, lookback_days=lookback_days, now=now)
+        typer.echo(f"Derivatives bootstrap {exchange} updates={updates}")
 
 
 @app.command("run-once")

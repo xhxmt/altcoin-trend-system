@@ -166,6 +166,7 @@ class BinancePublicAdapter:
         end_ms: int,
         period: str = "1h",
     ) -> list[OpenInterestObservation]:
+        start_ms = max(start_ms, end_ms - 30 * 86_400_000)
         response = httpx.get(
             f"{self.base_url}/futures/data/openInterestHist",
             params={"symbol": symbol, "period": period, "startTime": start_ms, "endTime": end_ms, "limit": 500},

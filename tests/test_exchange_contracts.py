@@ -439,6 +439,29 @@ def test_binance_derivatives_fetchers_call_public_endpoints(monkeypatch):
     assert calls[1][1] == {"symbol": "SOLUSDT", "period": "1h", "startTime": 1000, "endTime": 2000, "limit": 500}
 
 
+def test_binance_open_interest_fetcher_clamps_to_latest_30_days(monkeypatch):
+    adapter = BinancePublicAdapter()
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    def fake_get(url, params, timeout):
+        captured.update(params)
+        return Response()
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", fake_get)
+
+    end_ms = 100 * 86_400_000
+    adapter.fetch_open_interest_history("BTCUSDT", start_ms=0, end_ms=end_ms, period="1h")
+
+    assert captured["startTime"] == end_ms - 30 * 86_400_000
+
+
 def test_bybit_derivatives_fetchers_call_public_endpoints(monkeypatch):
     adapter = BybitPublicAdapter()
     calls = []

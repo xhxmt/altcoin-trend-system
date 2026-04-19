@@ -10,6 +10,7 @@ from sqlalchemy import Engine, text
 
 from altcoin_trend.db import insert_rows
 from altcoin_trend.features.indicators import add_ema, adx, atr
+from altcoin_trend.features.relative_strength import RelativeStrengthFeature, build_relative_strength_features
 from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.features.scoring import ScoreInput, compute_final_score
 from altcoin_trend.signals.alerts import build_alert_event_rows
@@ -28,7 +29,11 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _component_scores(group: pd.DataFrame, timeframe_features: dict[str, Any] | None = None) -> dict[str, float]:
+def _component_scores(
+    group: pd.DataFrame,
+    timeframe_features: dict[str, Any] | None = None,
+    relative_strength_score: float = 50.0,
+) -> dict[str, float]:
     timeframe_features = timeframe_features or {}
     latest = group.iloc[-1]
     first = group.iloc[0]
@@ -66,7 +71,7 @@ def _component_scores(group: pd.DataFrame, timeframe_features: dict[str, Any] | 
     return {
         "trend_score": max(0.0, min(100.0, trend_score)),
         "volume_breakout_score": max(0.0, min(100.0, volume_breakout_score)),
-        "relative_strength_score": 50.0,
+        "relative_strength_score": max(0.0, min(100.0, float(relative_strength_score))),
         "derivatives_score": 50.0,
         "quality_score": max(0.0, min(100.0, len(group) / 60 * 100.0)),
     }
@@ -139,13 +144,26 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
 
     working = market_rows.copy()
     working["ts"] = pd.to_datetime(working["ts"], utc=True)
+    relative_strength_by_asset = build_relative_strength_features(working)
     feature_rows: list[dict[str, Any]] = []
 
     for asset_id, group in working.sort_values(["asset_id", "ts"]).groupby("asset_id"):
         group = add_ema(group, column="close", span=20, output="ema20_1m")
         latest = group.iloc[-1]
         timeframe_features = _higher_timeframe_features(group)
-        scores = _component_scores(group, timeframe_features)
+        relative_strength = relative_strength_by_asset.get(
+            int(asset_id),
+            RelativeStrengthFeature(
+                return_7d=None,
+                return_30d=None,
+                rs_btc_7d=None,
+                rs_eth_7d=None,
+                rs_btc_30d=None,
+                rs_eth_30d=None,
+                relative_strength_score=50.0,
+            ),
+        )
+        scores = _component_scores(group, timeframe_features, relative_strength.relative_strength_score)
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
         feature_rows.append(
             {
@@ -157,6 +175,10 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "close": float(latest["close"]),
                 "ema20_1m": float(latest["ema20_1m"]),
                 **timeframe_features,
+                "rs_btc_7d": relative_strength.rs_btc_7d,
+                "rs_eth_7d": relative_strength.rs_eth_7d,
+                "rs_btc_30d": relative_strength.rs_btc_30d,
+                "rs_eth_30d": relative_strength.rs_eth_30d,
                 "trend_score": scores["trend_score"],
                 "volume_breakout_score": scores["volume_breakout_score"],
                 "relative_strength_score": scores["relative_strength_score"],

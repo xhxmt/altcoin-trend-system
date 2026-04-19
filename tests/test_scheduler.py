@@ -144,6 +144,52 @@ def test_build_snapshot_rows_scores_aligned_4h_trend_above_fading_move():
     assert rank_rows[0]["symbol"] == "STRONGUSDT"
 
 
+def _relative_strength_rows(asset_id: int, symbol: str, closes: tuple[float, float, float]):
+    points = (
+        ("2026-01-01T00:00:00Z", closes[0]),
+        ("2026-01-24T00:00:00Z", closes[1]),
+        ("2026-01-31T00:00:00Z", closes[2]),
+    )
+    return [
+        {
+            "asset_id": asset_id,
+            "exchange": "binance",
+            "symbol": symbol,
+            "base_asset": symbol.removesuffix("USDT"),
+            "ts": ts,
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": 10.0,
+            "quote_volume": 1000.0,
+        }
+        for ts, close in points
+    ]
+
+
+def test_build_snapshot_rows_uses_data_driven_relative_strength():
+    snapshot_ts = datetime(2026, 1, 31, tzinfo=timezone.utc)
+    market_rows = pd.DataFrame(
+        _relative_strength_rows(1, "BTCUSDT", (100.0, 100.0, 105.0))
+        + _relative_strength_rows(2, "ETHUSDT", (100.0, 100.0, 110.0))
+        + _relative_strength_rows(3, "SOLUSDT", (100.0, 100.0, 120.0))
+        + _relative_strength_rows(4, "LAGUSDT", (100.0, 100.0, 95.0))
+    )
+
+    feature_rows, rank_rows = build_snapshot_rows(market_rows, snapshot_ts)
+    by_symbol = {row["symbol"]: row for row in feature_rows}
+
+    assert by_symbol["SOLUSDT"]["rs_btc_7d"] == 15.0
+    assert by_symbol["SOLUSDT"]["rs_eth_7d"] == 10.0
+    assert by_symbol["SOLUSDT"]["rs_btc_30d"] == 15.0
+    assert by_symbol["SOLUSDT"]["rs_eth_30d"] == 10.0
+    assert by_symbol["SOLUSDT"]["relative_strength_score"] > 80.0
+    assert by_symbol["LAGUSDT"]["relative_strength_score"] < 30.0
+    assert by_symbol["SOLUSDT"]["final_score"] > by_symbol["LAGUSDT"]["final_score"]
+    assert rank_rows[0]["symbol"] == "SOLUSDT"
+
+
 def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
     calls = []
 

@@ -113,11 +113,12 @@ def test_cli_rank_echoes_scope_and_limit(monkeypatch):
 
 
 def test_cli_rank_can_aggregate_symbols(monkeypatch):
-    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    captured = {}
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(default_exchanges="binance,bybit"))
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
-    monkeypatch.setattr(
-        "altcoin_trend.cli.load_rank_rows",
-        lambda engine, rank_scope, limit: [
+    def fake_load_rank_rows(engine, rank_scope, limit):
+        captured["limit"] = limit
+        return [
             {
                 "rank": 1,
                 "exchange": "bybit",
@@ -134,20 +135,29 @@ def test_cli_rank_can_aggregate_symbols(monkeypatch):
             },
             {
                 "rank": 3,
+                "exchange": "bybit",
+                "symbol": "ETHUSDT",
+                "final_score": 90.0,
+                "tier": "strong",
+            },
+            {
+                "rank": 4,
                 "exchange": "binance",
                 "symbol": "ETHUSDT",
                 "final_score": 79.5,
                 "tier": "watchlist",
             },
-        ],
-    )
+        ]
 
-    result = CliRunner().invoke(app, ["rank", "--aggregate-symbols"])
+    monkeypatch.setattr("altcoin_trend.cli.load_rank_rows", fake_load_rank_rows)
+
+    result = CliRunner().invoke(app, ["rank", "--limit", "1", "--aggregate-symbols"])
 
     assert result.exit_code == 0
+    assert captured["limit"] > 1
     assert "aggregate_symbols=True" in result.output
     assert "1. bybit:SOLUSDT score=91.2 tier=strong exchanges=2 avg_score=89.8" in result.output
-    assert "2. binance:ETHUSDT score=79.5 tier=watchlist exchanges=1 avg_score=79.5" in result.output
+    assert "2." not in result.output
 
 
 def test_cli_run_once_reports_pipeline_status(monkeypatch):

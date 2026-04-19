@@ -90,9 +90,13 @@ def rank(
     scope = exchange or "all"
     settings = load_settings()
     engine = build_engine(settings)
-    rows = load_rank_rows(engine, rank_scope=scope, limit=limit)
+    load_limit = limit
+    if aggregate_symbols:
+        load_limit = max(limit * max(1, len(settings.exchanges)), limit)
+    rows = load_rank_rows(engine, rank_scope=scope, limit=load_limit)
     if aggregate_symbols:
         rows = aggregate_rank_rows_by_symbol(rows)
+        rows = rows[:limit]
     if not rows:
         typer.echo(f"No rank snapshot found for scope={scope}")
         return

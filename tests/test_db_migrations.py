@@ -51,7 +51,10 @@ class _InsertFakeConnection:
         self.statements = statements
 
     def execute(self, statement, rows):
-        self.statements.append((str(statement), list(rows)))
+        recorded_rows = dict(rows) if isinstance(rows, dict) else list(rows)
+        self.statements.append((str(statement), recorded_rows))
+        if isinstance(rows, dict):
+            return _FakeResult([{"symbol": rows["symbol"], "asset_id": len(self.statements) + 99}])
         return _FakeResult([{"symbol": row["symbol"], "asset_id": index + 100} for index, row in enumerate(rows)])
 
 
@@ -79,7 +82,13 @@ class _FakeResult:
         self._rows = rows
 
     def mappings(self):
-        return list(self._rows)
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 def test_run_all_migrations_executes_packaged_sql_in_sorted_order(monkeypatch):
@@ -210,7 +219,7 @@ def test_upsert_instruments_returns_asset_ids_and_records_statement():
     assert "INSERT INTO alt_core.asset_master" in statement
     assert "ON CONFLICT (exchange, market_type, symbol)" in statement
     assert "RETURNING symbol, asset_id" in statement
-    assert rows[0]["symbol"] == "SOLUSDT"
+    assert rows["symbol"] == "SOLUSDT"
 
 
 def test_upsert_instruments_returns_empty_mapping_for_empty_input():
@@ -218,3 +227,42 @@ def test_upsert_instruments_returns_empty_mapping_for_empty_input():
 
     assert db.upsert_instruments(engine, []) == {}
     assert engine.statements == []
+
+
+def test_upsert_instruments_executes_rows_individually_to_preserve_returning_rows():
+    engine = _InsertFakeEngine()
+    instruments = [
+        Instrument(
+            exchange="binance",
+            market_type="usdt_perp",
+            symbol="SOLUSDT",
+            base_asset="SOL",
+            quote_asset="USDT",
+            status="trading",
+            onboard_at=None,
+            contract_type="PERPETUAL",
+            tick_size=0.01,
+            step_size=0.1,
+            min_notional=5.0,
+        ),
+        Instrument(
+            exchange="binance",
+            market_type="usdt_perp",
+            symbol="ETHUSDT",
+            base_asset="ETH",
+            quote_asset="USDT",
+            status="trading",
+            onboard_at=None,
+            contract_type="PERPETUAL",
+            tick_size=0.01,
+            step_size=0.1,
+            min_notional=5.0,
+        ),
+    ]
+
+    asset_ids = db.upsert_instruments(engine, instruments)
+
+    assert asset_ids == {"SOLUSDT": 100, "ETHUSDT": 101}
+    assert len(engine.statements) == 2
+    assert engine.statements[0][1]["symbol"] == "SOLUSDT"
+    assert engine.statements[1][1]["symbol"] == "ETHUSDT"

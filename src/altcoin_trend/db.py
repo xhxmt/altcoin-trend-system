@@ -147,10 +147,14 @@ def upsert_instruments(engine: Engine, instruments: Iterable[Instrument]) -> dic
         """
     )
 
+    asset_ids: dict[str, int] = {}
     with engine.begin() as connection:
-        result = connection.execute(statement, rows)
-        mappings = result.mappings() if hasattr(result, "mappings") else result
-        return {row["symbol"]: row["asset_id"] for row in mappings}
+        for row in rows:
+            result = connection.execute(statement, row)
+            mapping = result.mappings().first()
+            if mapping is not None:
+                asset_ids[mapping["symbol"]] = mapping["asset_id"]
+    return asset_ids
 
 
 def run_all_migrations(engine: Engine) -> None:

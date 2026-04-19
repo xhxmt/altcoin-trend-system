@@ -36,3 +36,30 @@ class MarketBar1m:
     taker_buy_base: float | None
     taker_buy_quote: float | None
     is_closed: bool
+
+
+@dataclass(frozen=True)
+class FundingRateObservation:
+    exchange: str
+    symbol: str
+    ts: datetime
+    funding_rate: float
+
+
+@dataclass(frozen=True)
+class OpenInterestObservation:
+    exchange: str
+    symbol: str
+    ts: datetime
+    open_interest: float
+    open_interest_value: float | None = None
+
+
+@dataclass(frozen=True)
+class LongShortRatioObservation:
+    exchange: str
+    symbol: str
+    ts: datetime
+    long_short_ratio: float
+    buy_ratio: float | None = None
+    sell_ratio: float | None = None

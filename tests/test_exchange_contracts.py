@@ -292,6 +292,75 @@ def test_bybit_fetch_klines_1m_paginates_and_sorts(monkeypatch):
     assert all(call["limit"] == 1000 for call in calls)
 
 
+def test_binance_derivatives_parsers_normalize_funding_and_open_interest():
+    adapter = BinancePublicAdapter()
+
+    funding = adapter.parse_funding_history(
+        [
+            {"symbol": "SOLUSDT", "fundingRate": "0.0001", "fundingTime": 1710000000000},
+            {"symbol": "SOLUSDT", "fundingRate": "bad", "fundingTime": 1710003600000},
+        ]
+    )
+    oi = adapter.parse_open_interest_history(
+        [
+            {
+                "symbol": "SOLUSDT",
+                "sumOpenInterest": "123.4",
+                "sumOpenInterestValue": "5678.9",
+                "timestamp": "1710000000000",
+            }
+        ]
+    )
+
+    assert len(funding) == 1
+    assert funding[0].exchange == "binance"
+    assert funding[0].symbol == "SOLUSDT"
+    assert funding[0].funding_rate == 0.0001
+    assert len(oi) == 1
+    assert oi[0].open_interest == 123.4
+    assert oi[0].open_interest_value == 5678.9
+
+
+def test_bybit_derivatives_parsers_normalize_funding_oi_and_long_short():
+    adapter = BybitPublicAdapter()
+
+    funding = adapter.parse_funding_history(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    {"symbol": "SOLUSDT", "fundingRate": "0.0002", "fundingRateTimestamp": "1710000000000"}
+                ]
+            },
+        }
+    )
+    oi = adapter.parse_open_interest_history(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {"list": [{"openInterest": "234.5", "timestamp": "1710000000000"}]},
+        },
+        symbol="SOLUSDT",
+    )
+    ratios = adapter.parse_long_short_ratio_history(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    {"symbol": "SOLUSDT", "buyRatio": "0.54", "sellRatio": "0.46", "timestamp": "1710000000000"}
+                ]
+            },
+        }
+    )
+
+    assert funding[0].exchange == "bybit"
+    assert funding[0].funding_rate == 0.0002
+    assert oi[0].open_interest == 234.5
+    assert ratios[0].long_short_ratio == 0.54 / 0.46
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 

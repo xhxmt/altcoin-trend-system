@@ -2,7 +2,14 @@ import math
 
 import httpx
 
-from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
+from altcoin_trend.models import (
+    FundingRateObservation,
+    Instrument,
+    LongShortRatioObservation,
+    MarketBar1m,
+    OpenInterestObservation,
+    utc_from_ms,
+)
 
 
 def _nonempty_str(value: object) -> str | None:
@@ -16,6 +23,16 @@ def _finite_float(value: object) -> float:
     if not math.isfinite(number):
         raise ValueError("value must be finite")
     return number
+
+
+def _bybit_result_list(payload: dict) -> list:
+    if not isinstance(payload, dict) or payload.get("retCode") != 0:
+        return []
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return []
+    rows = result.get("list", [])
+    return rows if isinstance(rows, list) else []
 
 
 class BybitPublicAdapter:
@@ -124,6 +141,73 @@ class BybitPublicAdapter:
             except (TypeError, ValueError, KeyError):
                 continue
         return bars
+
+    def parse_funding_history(self, payload: dict) -> list[FundingRateObservation]:
+        observations: list[FundingRateObservation] = []
+        for row in _bybit_result_list(payload):
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = _nonempty_str(row.get("symbol"))
+                if symbol is None:
+                    continue
+                observations.append(
+                    FundingRateObservation(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row["fundingRateTimestamp"])),
+                        funding_rate=_finite_float(row["fundingRate"]),
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return observations
+
+    def parse_open_interest_history(self, payload: dict, symbol: str) -> list[OpenInterestObservation]:
+        observations: list[OpenInterestObservation] = []
+        for row in _bybit_result_list(payload):
+            if not isinstance(row, dict):
+                continue
+            try:
+                observations.append(
+                    OpenInterestObservation(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row["timestamp"])),
+                        open_interest=_finite_float(row["openInterest"]),
+                        open_interest_value=None,
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return observations
+
+    def parse_long_short_ratio_history(self, payload: dict) -> list[LongShortRatioObservation]:
+        observations: list[LongShortRatioObservation] = []
+        for row in _bybit_result_list(payload):
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = _nonempty_str(row.get("symbol"))
+                if symbol is None:
+                    continue
+                buy_ratio = _finite_float(row["buyRatio"])
+                sell_ratio = _finite_float(row["sellRatio"])
+                if sell_ratio <= 0:
+                    continue
+                observations.append(
+                    LongShortRatioObservation(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row["timestamp"])),
+                        long_short_ratio=buy_ratio / sell_ratio,
+                        buy_ratio=buy_ratio,
+                        sell_ratio=sell_ratio,
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return observations
 
     def parse_instruments_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):

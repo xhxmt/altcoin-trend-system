@@ -2,7 +2,7 @@ import math
 
 import httpx
 
-from altcoin_trend.models import Instrument, MarketBar1m, utc_from_ms
+from altcoin_trend.models import FundingRateObservation, Instrument, MarketBar1m, OpenInterestObservation, utc_from_ms
 
 
 def _nonempty_str(value: object) -> str | None:
@@ -101,6 +101,51 @@ class BinancePublicAdapter:
             except (TypeError, ValueError, KeyError):
                 continue
         return bars
+
+    def parse_funding_history(self, rows: list[dict]) -> list[FundingRateObservation]:
+        observations: list[FundingRateObservation] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = _nonempty_str(row.get("symbol"))
+                if symbol is None:
+                    continue
+                observations.append(
+                    FundingRateObservation(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row["fundingTime"])),
+                        funding_rate=_finite_float(row["fundingRate"]),
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return observations
+
+    def parse_open_interest_history(self, rows: list[dict]) -> list[OpenInterestObservation]:
+        observations: list[OpenInterestObservation] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = _nonempty_str(row.get("symbol"))
+                if symbol is None:
+                    continue
+                observations.append(
+                    OpenInterestObservation(
+                        exchange=self.exchange,
+                        symbol=symbol,
+                        ts=utc_from_ms(int(row["timestamp"])),
+                        open_interest=_finite_float(row["sumOpenInterest"]),
+                        open_interest_value=_finite_float(row["sumOpenInterestValue"])
+                        if row.get("sumOpenInterestValue") is not None
+                        else None,
+                    )
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        return observations
 
     def parse_exchange_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):

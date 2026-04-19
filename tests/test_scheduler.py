@@ -321,6 +321,42 @@ def test_load_market_rows_queries_recent_31_day_window():
     assert captured["params"] == {"lookback_days": 31}
 
 
+def test_load_market_rows_selects_derivatives_columns():
+    captured = {}
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class Connection:
+        def execute(self, statement, params):
+            captured["sql"] = str(statement)
+            return Result()
+
+    class Begin:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class Engine:
+        def begin(self):
+            return Begin()
+
+    from altcoin_trend.scheduler import _load_market_rows
+
+    _load_market_rows(Engine())
+
+    assert "m.open_interest" in captured["sql"]
+    assert "m.funding_rate" in captured["sql"]
+    assert "m.long_short_ratio" in captured["sql"]
+    assert "m.buy_sell_ratio" in captured["sql"]
+
+
 def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     inserted = []

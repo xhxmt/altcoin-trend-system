@@ -281,7 +281,11 @@ def _load_market_rows(engine: Engine, lookback_days: int = 31) -> pd.DataFrame:
             m.quote_volume,
             m.trade_count,
             m.taker_buy_base,
-            m.taker_buy_quote
+            m.taker_buy_quote,
+            m.open_interest,
+            m.funding_rate,
+            m.long_short_ratio,
+            m.buy_sell_ratio
         FROM alt_core.market_1m AS m
         JOIN alt_core.asset_master AS a ON a.asset_id = m.asset_id
         CROSS JOIN latest

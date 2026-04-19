@@ -50,6 +50,31 @@ def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
     assert "Bootstrap completed exchanges=2 bars_written=6" in result.output
 
 
+def test_cli_bootstrap_reports_full_market_selection_mode(monkeypatch):
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_settings",
+        lambda: AppSettings(default_exchanges="binance", symbol_blocklist="BTCUSDT,ETHUSDT"),
+    )
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.bootstrap_exchange",
+        lambda adapter, engine, settings, lookback_days, now: type(
+            "Result",
+            (),
+            {
+                "exchange": adapter.exchange,
+                "instruments_selected": 1,
+                "bars_written": 2,
+            },
+        )(),
+    )
+
+    result = CliRunner().invoke(app, ["bootstrap", "--lookback-days", "30"])
+
+    assert result.exit_code == 0
+    assert "Bootstrap selection mode=full-market allowlist=0 blocklist=2" in result.output
+
+
 def test_cli_explain_uses_requested_exchange_and_symbol(monkeypatch):
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
@@ -218,3 +243,21 @@ def test_cli_bootstrap_derivatives_uses_loaded_settings(monkeypatch):
     assert calls == [("binance", 31), ("bybit", 31)]
     assert "Derivatives bootstrap binance updates=7" in result.output
     assert "Derivatives bootstrap bybit updates=7" in result.output
+
+
+def test_cli_bootstrap_derivatives_reports_allowlist_selection_mode(monkeypatch):
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_settings",
+        lambda: AppSettings(
+            default_exchanges="bybit",
+            symbol_allowlist="SOLUSDT,ETHUSDT",
+            symbol_blocklist="BTCUSDT",
+        ),
+    )
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr("altcoin_trend.cli.bootstrap_derivatives", lambda adapter, engine, settings, lookback_days, now: 7)
+
+    result = CliRunner().invoke(app, ["bootstrap-derivatives", "--lookback-days", "31"])
+
+    assert result.exit_code == 0
+    assert "Bootstrap derivatives selection mode=allowlist allowlist=2 blocklist=1" in result.output

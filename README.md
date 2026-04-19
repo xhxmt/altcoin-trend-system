@@ -14,12 +14,16 @@ cp config/acts.env.example ~/.config/acts/acts.env
 `AppSettings` loads `~/.config/acts/acts.env` automatically, and direct `ACTS_*`
 environment variables still override values from that file.
 
+Leave `ACTS_SYMBOL_ALLOWLIST` empty to run in full-market mode. In both
+full-market and allowlist mode, `ACTS_SYMBOL_BLOCKLIST` still removes symbols.
+
 ## CLI
 
 ```bash
 acts --help
 acts init-db
 acts bootstrap --lookback-days 90
+acts bootstrap-derivatives --lookback-days 31
 acts run-once
 acts rank --limit 30
 acts explain SOLUSDT --exchange binance

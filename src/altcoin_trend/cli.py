@@ -22,6 +22,13 @@ def main() -> None:
     """Register a root callback so Typer keeps subcommand mode."""
 
 
+def _selection_mode_text(settings) -> str:
+    allowlist_count = len(settings.allowlist_symbols)
+    blocklist_count = len(settings.blocklist_symbols)
+    mode = "full-market" if allowlist_count == 0 else "allowlist"
+    return f"selection mode={mode} allowlist={allowlist_count} blocklist={blocklist_count}"
+
+
 @app.command("init-db")
 def init_db() -> None:
     settings = load_settings()
@@ -36,6 +43,7 @@ def bootstrap(lookback_days: int = typer.Option(90, "--lookback-days", min=1)) -
     engine = build_engine(settings)
     now = datetime.now(timezone.utc)
     total_bars = 0
+    typer.echo(f"Bootstrap {_selection_mode_text(settings)}")
     for exchange in settings.exchanges:
         if exchange == "binance":
             adapter = BinancePublicAdapter()
@@ -57,6 +65,7 @@ def bootstrap_derivatives_command(lookback_days: int = typer.Option(31, "--lookb
     settings = load_settings()
     engine = build_engine(settings)
     now = datetime.now(timezone.utc)
+    typer.echo(f"Bootstrap derivatives {_selection_mode_text(settings)}")
     for exchange in settings.exchanges:
         if exchange == "binance":
             adapter = BinancePublicAdapter()

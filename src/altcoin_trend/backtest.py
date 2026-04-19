@@ -115,7 +115,7 @@ def _fetch_snapshot_rows(
             fs.symbol,
             fs.close,
             fs.final_score,
-            fs.tier,
+            COALESCE(r.tier, 'rejected') AS tier,
             fs.trend_score,
             fs.volume_breakout_score,
             fs.relative_strength_score,
@@ -123,6 +123,10 @@ def _fetch_snapshot_rows(
             fs.quality_score,
             fs.veto_reason_codes
         FROM alt_signal.feature_snapshot AS fs
+        LEFT JOIN alt_signal.rank_snapshot AS r
+          ON r.asset_id = fs.asset_id
+         AND r.ts = fs.ts
+         AND r.rank_scope = fs.exchange
         WHERE fs.ts >= :start
           AND fs.ts < :end
           AND fs.final_score >= :min_score
@@ -168,6 +172,8 @@ def run_signal_backtest(
 ) -> BacktestSummary:
     start_utc = _coerce_utc_datetime(start)
     end_utc = _coerce_utc_datetime(end)
+    if start_utc >= end_utc:
+        raise ValueError("start must be earlier than end")
     snapshot_rows = _fetch_snapshot_rows(engine, start_utc, end_utc, min_score)
 
     signals: list[dict[str, Any]] = []

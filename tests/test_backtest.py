@@ -2,7 +2,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from altcoin_trend.backtest import BacktestSummary, HorizonStats, parse_horizons, run_signal_backtest, summarize_backtest
+from altcoin_trend.backtest import (
+    BacktestSummary,
+    HorizonStats,
+    _fetch_snapshot_rows,
+    parse_horizons,
+    run_signal_backtest,
+    summarize_backtest,
+)
 
 
 def test_parse_horizons_parses_hours_and_days():
@@ -172,3 +179,54 @@ def test_run_signal_backtest_filters_and_uses_next_market_close(monkeypatch):
     assert summary.horizon_stats["4h"] == HorizonStats(avg_return=0.075, win_rate=50.0, observations=2)
     assert summary.horizon_stats["1d"] == HorizonStats(avg_return=0.25, win_rate=100.0, observations=2)
     assert [row["symbol"] for row in summary.top_signals] == ["XRPUSDT", "SOLUSDT"]
+
+
+def test_fetch_snapshot_rows_joins_rank_snapshot_for_tier(monkeypatch):
+    captured = {}
+
+    class Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class Connection:
+        def execute(self, statement, params=None):
+            captured["sql"] = str(statement)
+            captured["params"] = params
+            return Result([])
+
+    class Begin:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class Engine:
+        def begin(self):
+            return Begin()
+
+    _fetch_snapshot_rows(Engine(), start=datetime(2026, 1, 1, tzinfo=timezone.utc), end=datetime(2026, 1, 2, tzinfo=timezone.utc), min_score=60.0)
+
+    assert "alt_signal.rank_snapshot" in captured["sql"]
+    assert "COALESCE(r.tier, 'rejected') AS tier" in captured["sql"]
+    assert "fs.tier" not in captured["sql"]
+    assert captured["params"]["min_score"] == 60.0
+
+
+def test_run_signal_backtest_rejects_non_increasing_window():
+    with pytest.raises(ValueError, match="start must be earlier than end"):
+        run_signal_backtest(
+            engine=object(),
+            start=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            min_score=60.0,
+            horizons=(("1h", timedelta(hours=1)),),
+            high_value_only=False,
+            limit=10,
+        )

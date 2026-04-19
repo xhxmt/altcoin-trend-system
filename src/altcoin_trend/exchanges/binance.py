@@ -147,6 +147,36 @@ class BinancePublicAdapter:
                 continue
         return observations
 
+    def fetch_funding_rate_history(self, symbol: str, start_ms: int, end_ms: int) -> list[FundingRateObservation]:
+        response = httpx.get(
+            f"{self.base_url}/fapi/v1/fundingRate",
+            params={"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("Malformed Binance funding response: payload must be a list")
+        return self.parse_funding_history(payload)
+
+    def fetch_open_interest_history(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[OpenInterestObservation]:
+        response = httpx.get(
+            f"{self.base_url}/futures/data/openInterestHist",
+            params={"symbol": symbol, "period": period, "startTime": start_ms, "endTime": end_ms, "limit": 500},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("Malformed Binance open interest response: payload must be a list")
+        return self.parse_open_interest_history(payload)
+
     def parse_exchange_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):
             return []

@@ -361,6 +361,134 @@ def test_bybit_derivatives_parsers_normalize_funding_oi_and_long_short():
     assert ratios[0].long_short_ratio == 0.54 / 0.46
 
 
+def test_binance_derivatives_fetchers_call_public_endpoints(monkeypatch):
+    adapter = BinancePublicAdapter()
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, params, timeout):
+        calls.append((url, params.copy(), timeout))
+        if url.endswith("/fapi/v1/fundingRate"):
+            return Response([{"symbol": "SOLUSDT", "fundingRate": "0.0001", "fundingTime": 1710000000000}])
+        if url.endswith("/futures/data/openInterestHist"):
+            return Response(
+                [
+                    {
+                        "symbol": "SOLUSDT",
+                        "sumOpenInterest": "123.4",
+                        "sumOpenInterestValue": "5678.9",
+                        "timestamp": "1710000000000",
+                    }
+                ]
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr("altcoin_trend.exchanges.binance.httpx.get", fake_get)
+
+    funding = adapter.fetch_funding_rate_history("SOLUSDT", 1000, 2000)
+    oi = adapter.fetch_open_interest_history("SOLUSDT", 1000, 2000, "1h")
+
+    assert funding[0].funding_rate == 0.0001
+    assert oi[0].open_interest == 123.4
+    assert calls[0][0].endswith("/fapi/v1/fundingRate")
+    assert calls[0][1] == {"symbol": "SOLUSDT", "startTime": 1000, "endTime": 2000, "limit": 1000}
+    assert calls[1][0].endswith("/futures/data/openInterestHist")
+    assert calls[1][1] == {"symbol": "SOLUSDT", "period": "1h", "startTime": 1000, "endTime": 2000, "limit": 500}
+
+
+def test_bybit_derivatives_fetchers_call_public_endpoints(monkeypatch):
+    adapter = BybitPublicAdapter()
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, params, timeout):
+        calls.append((url, params.copy(), timeout))
+        if url.endswith("/v5/market/funding/history"):
+            return Response(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "list": [
+                            {"symbol": "SOLUSDT", "fundingRate": "0.0002", "fundingRateTimestamp": "1710000000000"}
+                        ]
+                    },
+                }
+            )
+        if url.endswith("/v5/market/open-interest"):
+            return Response(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {"list": [{"openInterest": "234.5", "timestamp": "1710000000000"}], "nextPageCursor": ""},
+                }
+            )
+        if url.endswith("/v5/market/account-ratio"):
+            return Response(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "list": [
+                            {
+                                "symbol": "SOLUSDT",
+                                "buyRatio": "0.54",
+                                "sellRatio": "0.46",
+                                "timestamp": "1710000000000",
+                            }
+                        ],
+                        "nextPageCursor": "",
+                    },
+                }
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr("altcoin_trend.exchanges.bybit.httpx.get", fake_get)
+
+    funding = adapter.fetch_funding_rate_history("SOLUSDT", 1000, 2000)
+    oi = adapter.fetch_open_interest_history("SOLUSDT", 1000, 2000, "1h")
+    ratios = adapter.fetch_long_short_ratio_history("SOLUSDT", 1000, 2000, "1h")
+
+    assert funding[0].funding_rate == 0.0002
+    assert oi[0].open_interest == 234.5
+    assert ratios[0].long_short_ratio == 0.54 / 0.46
+    assert calls[0][1] == {"category": "linear", "symbol": "SOLUSDT", "startTime": 1000, "endTime": 2000, "limit": 200}
+    assert calls[1][1] == {
+        "category": "linear",
+        "symbol": "SOLUSDT",
+        "intervalTime": "1h",
+        "startTime": 1000,
+        "endTime": 2000,
+        "limit": 200,
+    }
+    assert calls[2][1] == {
+        "category": "linear",
+        "symbol": "SOLUSDT",
+        "period": "1h",
+        "startTime": "1000",
+        "endTime": "2000",
+        "limit": 500,
+    }
+
+
 def test_binance_kline_ws_parser_returns_closed_bar():
     adapter = BinancePublicAdapter()
 

@@ -209,6 +209,84 @@ class BybitPublicAdapter:
                 continue
         return observations
 
+    def fetch_funding_rate_history(self, symbol: str, start_ms: int, end_ms: int) -> list[FundingRateObservation]:
+        response = httpx.get(
+            f"{self.base_url}/v5/market/funding/history",
+            params={"category": "linear", "symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 200},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Malformed Bybit funding response: payload must be a mapping")
+        return self.parse_funding_history(payload)
+
+    def fetch_open_interest_history(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[OpenInterestObservation]:
+        observations: list[OpenInterestObservation] = []
+        cursor: str | None = None
+        while True:
+            params = {
+                "category": "linear",
+                "symbol": symbol,
+                "intervalTime": period,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": 200,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            response = httpx.get(f"{self.base_url}/v5/market/open-interest", params=params, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Malformed Bybit open interest response: payload must be a mapping")
+            observations.extend(self.parse_open_interest_history(payload, symbol=symbol))
+            result = payload.get("result")
+            next_cursor = result.get("nextPageCursor") if isinstance(result, dict) else None
+            if not isinstance(next_cursor, str) or not next_cursor.strip():
+                break
+            cursor = next_cursor
+        return observations
+
+    def fetch_long_short_ratio_history(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[LongShortRatioObservation]:
+        observations: list[LongShortRatioObservation] = []
+        cursor: str | None = None
+        while True:
+            params = {
+                "category": "linear",
+                "symbol": symbol,
+                "period": period,
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": 500,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            response = httpx.get(f"{self.base_url}/v5/market/account-ratio", params=params, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Malformed Bybit long short response: payload must be a mapping")
+            observations.extend(self.parse_long_short_ratio_history(payload))
+            result = payload.get("result")
+            next_cursor = result.get("nextPageCursor") if isinstance(result, dict) else None
+            if not isinstance(next_cursor, str) or not next_cursor.strip():
+                break
+            cursor = next_cursor
+        return observations
+
     def parse_instruments_info(self, payload: dict) -> list[Instrument]:
         if not isinstance(payload, dict):
             return []

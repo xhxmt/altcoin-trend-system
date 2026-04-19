@@ -50,18 +50,32 @@ def _component_scores(
 
     ema20_4h = timeframe_features.get("ema20_4h")
     ema60_4h = timeframe_features.get("ema60_4h")
+    ema20_1d = timeframe_features.get("ema20_1d")
+    ema60_1d = timeframe_features.get("ema60_1d")
     adx14_4h = timeframe_features.get("adx14_4h")
     breakout_20d = bool(timeframe_features.get("breakout_20d"))
+    return_7d = timeframe_features.get("return_7d")
+    return_30d = timeframe_features.get("return_30d")
 
     trend_score = 20.0
+    extension_penalty = 0.0
     if ema20_4h is not None and latest_close > float(ema20_4h):
         trend_score += 25.0
         if float(ema20_4h) > 0:
-            trend_score += max(0.0, min(15.0, ((latest_close / float(ema20_4h)) - 1.0) * 200.0))
+            extension_pct = ((latest_close / float(ema20_4h)) - 1.0) * 100.0
+            trend_score += max(0.0, min(15.0, extension_pct * 2.0))
+            if extension_pct > 18.0:
+                extension_penalty = min(35.0, (extension_pct - 18.0) * 3.0)
     if ema20_4h is not None and ema60_4h is not None and float(ema20_4h) > float(ema60_4h):
         trend_score += 25.0
     if adx14_4h is not None:
         trend_score += max(0.0, min(20.0, float(adx14_4h) / 40.0 * 20.0))
+    if ema20_1d is not None and ema60_1d is not None and float(ema20_1d) > float(ema60_1d):
+        trend_score += 10.0
+    if return_7d is not None:
+        trend_score += max(0.0, min(8.0, float(return_7d) / 4.0))
+    if return_30d is not None:
+        trend_score += max(0.0, min(7.0, float(return_30d) / 8.0))
     trend_score += max(0.0, min(10.0, return_pct / 3.0))
 
     volume_breakout_score = max(0.0, min(80.0, effective_volume_ratio * 40.0))
@@ -69,7 +83,7 @@ def _component_scores(
         volume_breakout_score += 20.0
 
     return {
-        "trend_score": max(0.0, min(100.0, trend_score)),
+        "trend_score": max(0.0, min(100.0, trend_score) - extension_penalty),
         "volume_breakout_score": max(0.0, min(100.0, volume_breakout_score)),
         "relative_strength_score": max(0.0, min(100.0, float(relative_strength_score))),
         "derivatives_score": 50.0,
@@ -105,6 +119,8 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
         "atr14_4h": None,
         "volume_ratio_4h": None,
         "breakout_20d": False,
+        "return_7d": None,
+        "return_30d": None,
     }
 
     bars_4h = resample_market_1m(working, "4h")
@@ -135,6 +151,19 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
             previous_high = float(bars_1d["high"].iloc[-21:-1].max())
             features["breakout_20d"] = float(bars_1d["close"].iloc[-1]) > previous_high
 
+    if not working.empty:
+        ordered = working.sort_values("ts")
+        latest = ordered.iloc[-1]
+        latest_close = float(latest["close"])
+        for days, key in ((7, "return_7d"), (30, "return_30d")):
+            anchor_ts = latest["ts"] - pd.Timedelta(days=days)
+            history = ordered[ordered["ts"] <= anchor_ts]
+            if history.empty:
+                continue
+            anchor_close = float(history.iloc[-1]["close"])
+            if anchor_close > 0:
+                features[key] = ((latest_close / anchor_close) - 1.0) * 100.0
+
     return features
 
 
@@ -151,6 +180,9 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
         group = add_ema(group, column="close", span=20, output="ema20_1m")
         latest = group.iloc[-1]
         timeframe_features = _higher_timeframe_features(group)
+        snapshot_timeframe_features = {
+            key: value for key, value in timeframe_features.items() if key not in {"return_7d", "return_30d"}
+        }
         relative_strength = relative_strength_by_asset.get(
             int(asset_id),
             RelativeStrengthFeature(
@@ -174,7 +206,7 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "base_asset": latest["base_asset"],
                 "close": float(latest["close"]),
                 "ema20_1m": float(latest["ema20_1m"]),
-                **timeframe_features,
+                **snapshot_timeframe_features,
                 "rs_btc_7d": relative_strength.rs_btc_7d,
                 "rs_eth_7d": relative_strength.rs_eth_7d,
                 "rs_btc_30d": relative_strength.rs_btc_30d,

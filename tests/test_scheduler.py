@@ -190,6 +190,41 @@ def test_build_snapshot_rows_uses_data_driven_relative_strength():
     assert rank_rows[0]["symbol"] == "SOLUSDT"
 
 
+def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():
+    snapshot_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    rows = []
+    for minute in range(31 * 24 * 60):
+        ts = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(minutes=minute)
+        steady_close = 100.0 + 0.01 * minute
+        extended_close = 100.0 + 0.01 * minute
+        if minute > 31 * 24 * 60 - 240:
+            extended_close += 90.0
+        for asset_id, symbol, close in (
+            (20, "STEADYUSDT", steady_close),
+            (21, "EXTENDEDUSDT", extended_close),
+        ):
+            rows.append(
+                {
+                    "asset_id": asset_id,
+                    "exchange": "binance",
+                    "symbol": symbol,
+                    "base_asset": symbol.removesuffix("USDT"),
+                    "ts": ts,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 10.0,
+                    "quote_volume": 1000.0,
+                }
+            )
+
+    feature_rows, _ = build_snapshot_rows(pd.DataFrame(rows), snapshot_ts)
+    by_symbol = {row["symbol"]: row for row in feature_rows}
+
+    assert by_symbol["STEADYUSDT"]["trend_score"] > by_symbol["EXTENDEDUSDT"]["trend_score"]
+
+
 def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
     calls = []
 

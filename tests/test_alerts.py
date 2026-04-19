@@ -99,6 +99,28 @@ def test_build_strong_alert_message_strips_blank_items_to_none():
     assert "Risks: none" in text
 
 
+def test_build_strong_alert_message_shows_na_for_missing_core_scores():
+    text = build_strong_alert_message(
+        {
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "final_score": 91.25,
+            "trend_score": None,
+            "volume_breakout_score": None,
+            "relative_strength_score": None,
+            "derivatives_score": None,
+            "quality_score": None,
+        }
+    )
+
+    assert "Trend: n/a" in text
+    assert "Volume breakout: n/a" in text
+    assert "Relative strength: n/a" in text
+    assert "Derivatives: n/a" in text
+    assert "Quality: n/a" in text
+    assert "Trend: None" not in text
+
+
 def test_build_strong_alert_message_includes_derivatives_context_when_available():
     text = build_strong_alert_message(
         {

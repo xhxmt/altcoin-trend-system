@@ -395,6 +395,7 @@ def test_load_rank_rows_selects_alert_gate_fields_from_feature_snapshot():
     assert "fs.quality_score" in captured["sql"]
     assert "fs.volume_breakout_score" in captured["sql"]
     assert "fs.veto_reason_codes" in captured["sql"]
+    assert "LEFT JOIN alt_signal.feature_snapshot AS fs" not in captured["sql"]
     assert captured["params"] == {"rank_scope": "all", "limit": 30}
 
 

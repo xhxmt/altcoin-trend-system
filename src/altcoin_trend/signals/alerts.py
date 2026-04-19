@@ -101,15 +101,19 @@ def build_strong_alert_message(row: Mapping[str, Any] | Any) -> str:
     if not risks:
         risks = _normalize_items(_get(row, "veto_reason_codes", None))
 
+    def _display_score(key: str) -> Any:
+        value = _get(row, key, None)
+        return "n/a" if value is None else value
+
     lines = [
         f"[STRONG] {symbol} {display_exchange}",
         f"Final score: {final_score}",
         "Score breakdown:",
-        f"Trend: {_get(row, 'trend_score', 'n/a')}",
-        f"Volume breakout: {_get(row, 'volume_breakout_score', 'n/a')}",
-        f"Relative strength: {_get(row, 'relative_strength_score', 'n/a')}",
-        f"Derivatives: {_get(row, 'derivatives_score', 'n/a')}",
-        f"Quality: {_get(row, 'quality_score', 'n/a')}",
+        f"Trend: {_display_score('trend_score')}",
+        f"Volume breakout: {_display_score('volume_breakout_score')}",
+        f"Relative strength: {_display_score('relative_strength_score')}",
+        f"Derivatives: {_display_score('derivatives_score')}",
+        f"Quality: {_display_score('quality_score')}",
     ]
     for label, key in (
         ("OI delta 1h", "oi_delta_1h"),

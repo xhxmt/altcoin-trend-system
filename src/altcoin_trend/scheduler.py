@@ -345,7 +345,7 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
             fs.veto_reason_codes
         FROM alt_signal.rank_snapshot AS r
         JOIN alt_core.asset_master AS a USING (asset_id)
-        LEFT JOIN alt_signal.feature_snapshot AS fs
+        JOIN alt_signal.feature_snapshot AS fs
           ON fs.asset_id = r.asset_id
          AND fs.ts = r.ts
         WHERE r.rank_scope = :rank_scope

@@ -13,6 +13,7 @@ def test_cli_help_lists_mvp_commands():
     assert result.exit_code == 0
     assert "init-db" in result.output
     assert "bootstrap" in result.output
+    assert "sync-once" in result.output
     assert "run-once" in result.output
     assert "daemon" in result.output
     assert "rank" in result.output
@@ -54,7 +55,7 @@ def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
 def test_cli_bootstrap_reports_full_market_selection_mode(monkeypatch):
     monkeypatch.setattr(
         "altcoin_trend.cli.load_settings",
-        lambda: AppSettings(default_exchanges="binance", symbol_blocklist="BTCUSDT,ETHUSDT"),
+        lambda: AppSettings(default_exchanges="binance", symbol_allowlist="", symbol_blocklist="BTCUSDT,ETHUSDT"),
     )
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
     monkeypatch.setattr(
@@ -198,6 +199,30 @@ def test_cli_run_once_reports_pipeline_status(monkeypatch):
 
     assert result.exit_code == 0
     assert "Run once status=healthy message=ok" in result.output
+
+
+def test_cli_sync_once_reports_input_sync_status(monkeypatch):
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_settings",
+        lambda: AppSettings(symbol_allowlist="SOLUSDT"),
+    )
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.sync_market_inputs",
+        lambda *, engine, settings, now: type(
+            "Result",
+            (),
+            {
+                "status": "healthy",
+                "message": "instruments_selected=2 bars_written=4 derivatives_updated=1",
+            },
+        )(),
+    )
+
+    result = CliRunner().invoke(app, ["sync-once"])
+
+    assert result.exit_code == 0
+    assert "Sync once status=healthy message=instruments_selected=2 bars_written=4 derivatives_updated=1" in result.output
 
 
 def test_cli_status_reports_loaded_settings(monkeypatch):

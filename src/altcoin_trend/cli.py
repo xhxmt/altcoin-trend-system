@@ -5,6 +5,7 @@ import typer
 from altcoin_trend.backtest import parse_horizons, run_signal_backtest
 from altcoin_trend.config import load_settings
 from altcoin_trend.daemon import main as daemon_main
+from altcoin_trend.daemon import sync_market_inputs
 from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
@@ -107,6 +108,14 @@ def run_once() -> None:
     engine = build_engine(settings)
     result = run_once_pipeline(engine=engine)
     typer.echo(f"Run once status={result.status} message={result.message}")
+
+
+@app.command("sync-once")
+def sync_once() -> None:
+    settings = load_settings()
+    engine = build_engine(settings)
+    result = sync_market_inputs(engine=engine, settings=settings, now=datetime.now(timezone.utc))
+    typer.echo(f"Sync once status={result.status} message={result.message}")
 
 
 @app.command("daemon")

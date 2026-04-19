@@ -38,6 +38,7 @@ def make_instrument(
 
 def test_filter_instruments_keeps_only_trading_usdt_perp_and_respects_blocklist():
     settings = AppSettings(
+        symbol_allowlist="",
         symbol_blocklist="BANNED",
     )
     instruments = [
@@ -69,7 +70,7 @@ def test_filter_instruments_honors_allowlist_and_preserves_order():
 
 
 def test_filter_instruments_enforces_min_listing_age_boundary():
-    settings = AppSettings(min_listing_days=60)
+    settings = AppSettings(min_listing_days=60, symbol_allowlist="")
     instruments = [
         make_instrument("OLD", onboard_at=NOW - timedelta(days=60)),
         make_instrument("TOO_NEW", onboard_at=NOW - timedelta(days=59)),

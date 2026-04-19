@@ -248,9 +248,13 @@ def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[st
     ]
 
 
-def _load_market_rows(engine: Engine, lookback_rows: int = 10_000) -> pd.DataFrame:
+def _load_market_rows(engine: Engine, lookback_days: int = 31) -> pd.DataFrame:
     statement = text(
         """
+        WITH latest AS (
+            SELECT MAX(ts) AS max_ts
+            FROM alt_core.market_1m
+        )
         SELECT
             m.asset_id,
             m.exchange,
@@ -268,12 +272,14 @@ def _load_market_rows(engine: Engine, lookback_rows: int = 10_000) -> pd.DataFra
             m.taker_buy_quote
         FROM alt_core.market_1m AS m
         JOIN alt_core.asset_master AS a ON a.asset_id = m.asset_id
-        ORDER BY m.ts DESC
-        LIMIT :limit
+        CROSS JOIN latest
+        WHERE latest.max_ts IS NOT NULL
+          AND m.ts >= latest.max_ts - make_interval(days => :lookback_days)
+        ORDER BY m.asset_id, m.ts
         """
     )
     with engine.begin() as connection:
-        result = connection.execute(statement, {"limit": lookback_rows})
+        result = connection.execute(statement, {"lookback_days": lookback_days})
         return pd.DataFrame(result.mappings().all())
 
 

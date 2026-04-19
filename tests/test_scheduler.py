@@ -357,6 +357,47 @@ def test_load_market_rows_selects_derivatives_columns():
     assert "m.buy_sell_ratio" in captured["sql"]
 
 
+def test_load_rank_rows_selects_alert_gate_fields_from_feature_snapshot():
+    captured = {}
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class Connection:
+        def execute(self, statement, params):
+            captured["sql"] = str(statement)
+            captured["params"] = params
+            return Result()
+
+    class Begin:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class Engine:
+        def begin(self):
+            return Begin()
+
+    from altcoin_trend.scheduler import load_rank_rows
+
+    load_rank_rows(Engine(), rank_scope="all", limit=30)
+
+    assert "JOIN alt_signal.feature_snapshot AS fs" in captured["sql"]
+    assert "fs.trend_score" in captured["sql"]
+    assert "fs.relative_strength_score" in captured["sql"]
+    assert "fs.derivatives_score" in captured["sql"]
+    assert "fs.quality_score" in captured["sql"]
+    assert "fs.volume_breakout_score" in captured["sql"]
+    assert "fs.veto_reason_codes" in captured["sql"]
+    assert captured["params"] == {"rank_scope": "all", "limit": 30}
+
+
 def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     inserted = []
@@ -372,9 +413,10 @@ def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
                 "final_score": 88.4,
                 "trend_score": 90.0,
                 "volume_breakout_score": 80.0,
-                "relative_strength_score": 50.0,
-                "derivatives_score": 50.0,
+                "relative_strength_score": 75.0,
+                "derivatives_score": 60.0,
                 "quality_score": 100.0,
+                "veto_reason_codes": [],
             }
         ],
     )

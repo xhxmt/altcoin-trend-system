@@ -4,7 +4,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from altcoin_trend.signals.alerts import AlertCooldown, build_alert_event_rows, build_strong_alert_message
+from altcoin_trend.signals.alerts import (
+    AlertCooldown,
+    build_alert_event_rows,
+    build_strong_alert_message,
+    is_high_value_signal,
+)
 from altcoin_trend.signals.telegram import TelegramClient
 
 
@@ -94,9 +99,129 @@ def test_build_strong_alert_message_strips_blank_items_to_none():
     assert "Risks: none" in text
 
 
-def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_duplicate():
+def test_build_strong_alert_message_includes_derivatives_context_when_available():
+    text = build_strong_alert_message(
+        {
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "final_score": 91.25,
+            "trend_score": 95.0,
+            "volume_breakout_score": 90.0,
+            "relative_strength_score": 88.0,
+            "derivatives_score": 77.0,
+            "quality_score": 84.0,
+            "oi_delta_1h": 12.5,
+            "oi_delta_4h": -4.0,
+            "funding_zscore": 1.8,
+            "taker_buy_sell_ratio": 1.23,
+        }
+    )
+
+    assert "OI delta 1h: 12.5" in text
+    assert "OI delta 4h: -4.0" in text
+    assert "Funding z-score: 1.8" in text
+    assert "Taker buy/sell ratio: 1.23" in text
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {
+            "tier": "strong",
+            "trend_score": 74.0,
+            "relative_strength_score": 70.0,
+            "derivatives_score": 55.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 40.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "strong",
+            "trend_score": 75.0,
+            "relative_strength_score": 69.0,
+            "derivatives_score": 55.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 40.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "strong",
+            "trend_score": 75.0,
+            "relative_strength_score": 70.0,
+            "derivatives_score": 54.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 40.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "strong",
+            "trend_score": 75.0,
+            "relative_strength_score": 70.0,
+            "derivatives_score": 55.0,
+            "quality_score": 79.0,
+            "volume_breakout_score": 40.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "strong",
+            "trend_score": 75.0,
+            "relative_strength_score": 70.0,
+            "derivatives_score": 55.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 39.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "rejected",
+            "trend_score": 80.0,
+            "relative_strength_score": 80.0,
+            "derivatives_score": 80.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 80.0,
+            "veto_reason_codes": [],
+        },
+        {
+            "tier": "watchlist",
+            "trend_score": 80.0,
+            "relative_strength_score": 80.0,
+            "derivatives_score": 80.0,
+            "quality_score": 80.0,
+            "volume_breakout_score": 80.0,
+            "veto_reason_codes": ["liquidity"],
+        },
+    ],
+)
+def test_is_high_value_signal_rejects_non_qualifying_rows(row):
+    assert is_high_value_signal(row) is False
+
+
+def test_is_high_value_signal_accepts_complete_strong_and_watchlist_rows_for_mapping_and_object_rows():
+    mapping_row = {
+        "tier": "strong",
+        "trend_score": 75.0,
+        "relative_strength_score": 70.0,
+        "derivatives_score": 55.0,
+        "quality_score": 80.0,
+        "volume_breakout_score": 40.0,
+        "veto_reason_codes": (),
+    }
+    object_row = SimpleNamespace(
+        tier="watchlist",
+        trend_score=80.0,
+        relative_strength_score=72.0,
+        derivatives_score=60.0,
+        quality_score=90.0,
+        volume_breakout_score=45.0,
+        veto_reason_codes=None,
+    )
+
+    assert is_high_value_signal(mapping_row) is True
+    assert is_high_value_signal(object_row) is True
+
+
+def test_build_alert_event_rows_blocks_positive_alerts_for_non_high_value_rows():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    rank_rows = [
+    positive_rows = [
         {
             "asset_id": 17,
             "exchange": "binance",
@@ -108,6 +233,70 @@ def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_dupli
             "relative_strength_score": 50.0,
             "derivatives_score": 50.0,
             "quality_score": 100.0,
+        },
+        {
+            "asset_id": 18,
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "tier": "watchlist",
+            "final_score": 88.4,
+            "trend_score": 90.0,
+            "volume_breakout_score": 80.0,
+            "relative_strength_score": 50.0,
+            "derivatives_score": 50.0,
+            "quality_score": 100.0,
+        },
+    ]
+
+    for rank_row in positive_rows:
+        events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+        assert events == []
+
+
+def test_build_alert_event_rows_keeps_risk_downgrade_alerts_even_when_row_is_not_high_value():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 19,
+        "exchange": "binance",
+        "symbol": "SOLUSDT",
+        "tier": "watchlist",
+        "final_score": 88.4,
+        "trend_score": 90.0,
+        "volume_breakout_score": 80.0,
+        "relative_strength_score": 50.0,
+        "derivatives_score": 50.0,
+        "quality_score": 100.0,
+    }
+    recent_events = [
+        {
+            "asset_id": 19,
+            "alert_type": "strong_trend",
+            "ts": datetime(2025, 12, 31, tzinfo=timezone.utc),
+            "payload": {"current_tier": "strong"},
+        }
+    ]
+
+    events = build_alert_event_rows([rank_row], recent_events=recent_events, now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "risk_downgrade"
+
+
+def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_duplicate():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_rows = [
+        {
+            "asset_id": 17,
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "tier": "strong",
+            "final_score": 88.4,
+            "trend_score": 90.0,
+            "volume_breakout_score": 80.0,
+            "relative_strength_score": 75.0,
+            "derivatives_score": 60.0,
+            "quality_score": 100.0,
+            "veto_reason_codes": [],
         }
     ]
 

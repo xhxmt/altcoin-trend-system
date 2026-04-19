@@ -33,6 +33,31 @@ def _require_aware_datetime(value: datetime) -> datetime:
     return value
 
 
+def is_high_value_signal(row: Mapping[str, Any] | Any) -> bool:
+    tier = str(_get(row, "tier", "")).strip()
+    if tier not in {"watchlist", "strong"}:
+        return False
+
+    try:
+        trend_score = float(_get(row, "trend_score", 0.0))
+        relative_strength_score = float(_get(row, "relative_strength_score", 0.0))
+        derivatives_score = float(_get(row, "derivatives_score", 0.0))
+        quality_score = float(_get(row, "quality_score", 0.0))
+        volume_breakout_score = float(_get(row, "volume_breakout_score", 0.0))
+    except (TypeError, ValueError):
+        return False
+
+    veto_reason_codes = _normalize_items(_get(row, "veto_reason_codes", None))
+    return (
+        trend_score >= 75.0
+        and relative_strength_score >= 70.0
+        and derivatives_score >= 55.0
+        and quality_score >= 80.0
+        and volume_breakout_score >= 40.0
+        and not veto_reason_codes
+    )
+
+
 @dataclass
 class AlertCooldown:
     cooldown_seconds: int
@@ -85,9 +110,22 @@ def build_strong_alert_message(row: Mapping[str, Any] | Any) -> str:
         f"Relative strength: {_get(row, 'relative_strength_score', 'n/a')}",
         f"Derivatives: {_get(row, 'derivatives_score', 'n/a')}",
         f"Quality: {_get(row, 'quality_score', 'n/a')}",
-        f"Reasons: {', '.join(reasons) if reasons else 'none'}",
-        f"Risks: {', '.join(risks) if risks else 'none'}",
     ]
+    for label, key in (
+        ("OI delta 1h", "oi_delta_1h"),
+        ("OI delta 4h", "oi_delta_4h"),
+        ("Funding z-score", "funding_zscore"),
+        ("Taker buy/sell ratio", "taker_buy_sell_ratio"),
+    ):
+        value = _get(row, key, None)
+        if value is not None:
+            lines.append(f"{label}: {value}")
+    lines.extend(
+        [
+            f"Reasons: {', '.join(reasons) if reasons else 'none'}",
+            f"Risks: {', '.join(risks) if risks else 'none'}",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -140,6 +178,8 @@ def build_alert_event_rows(
             veto_reason_codes=_get(row, "veto_reason_codes", ()),
         )
         if not decision.should_alert:
+            continue
+        if decision.alert_type in {"strong_trend", "watchlist_enter", "breakout_confirmed"} and not is_high_value_signal(row):
             continue
 
         recent_event = events_by_key.get((asset_id, decision.alert_type))

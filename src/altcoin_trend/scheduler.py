@@ -332,9 +332,22 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
             r.base_asset,
             r.final_score,
             r.tier,
-            r.primary_reason
+            r.primary_reason,
+            fs.trend_score,
+            fs.volume_breakout_score,
+            fs.relative_strength_score,
+            fs.derivatives_score,
+            fs.quality_score,
+            fs.oi_delta_1h,
+            fs.oi_delta_4h,
+            fs.funding_zscore,
+            fs.taker_buy_sell_ratio,
+            fs.veto_reason_codes
         FROM alt_signal.rank_snapshot AS r
         JOIN alt_core.asset_master AS a USING (asset_id)
+        LEFT JOIN alt_signal.feature_snapshot AS fs
+          ON fs.asset_id = r.asset_id
+         AND fs.ts = r.ts
         WHERE r.rank_scope = :rank_scope
           AND r.ts = (
               SELECT MAX(ts)

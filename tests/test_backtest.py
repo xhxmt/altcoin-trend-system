@@ -215,6 +215,7 @@ def test_fetch_snapshot_rows_joins_rank_snapshot_for_tier(monkeypatch):
 
     assert "alt_signal.rank_snapshot" in captured["sql"]
     assert "COALESCE(r.tier, 'rejected') AS tier" in captured["sql"]
+    assert "AND r.rank_scope = 'all'" in captured["sql"]
     assert "fs.tier" not in captured["sql"]
     assert captured["params"]["min_score"] == 60.0
 

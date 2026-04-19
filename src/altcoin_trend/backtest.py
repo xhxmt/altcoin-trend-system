@@ -126,7 +126,7 @@ def _fetch_snapshot_rows(
         LEFT JOIN alt_signal.rank_snapshot AS r
           ON r.asset_id = fs.asset_id
          AND r.ts = fs.ts
-         AND r.rank_scope = fs.exchange
+         AND r.rank_scope = 'all'
         WHERE fs.ts >= :start
           AND fs.ts < :end
           AND fs.final_score >= :min_score

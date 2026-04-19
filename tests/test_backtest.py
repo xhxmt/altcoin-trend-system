@@ -40,8 +40,8 @@ def test_summarize_backtest_computes_counts_and_horizon_stats():
         tier_counts={"strong": 1, "watchlist": 1},
         exchange_counts={"binance": 1, "bybit": 1},
         horizon_stats={
-            "1h": HorizonStats(avg_return=0.025, win_rate=50.0),
-            "4h": HorizonStats(avg_return=0.25, win_rate=100.0),
+            "1h": HorizonStats(avg_return=0.025, win_rate=50.0, observations=2),
+            "4h": HorizonStats(avg_return=0.25, win_rate=100.0, observations=2),
         },
         top_signals=[{"exchange": "binance", "symbol": "SOLUSDT", "final_score": 90.0, "tier": "strong"}],
     )
@@ -168,7 +168,7 @@ def test_run_signal_backtest_filters_and_uses_next_market_close(monkeypatch):
     assert summary.average_score == 92.5
     assert summary.tier_counts == {"strong": 2}
     assert summary.exchange_counts == {"binance": 2}
-    assert summary.horizon_stats["1h"] == HorizonStats(avg_return=0.1, win_rate=100.0)
-    assert summary.horizon_stats["4h"] == HorizonStats(avg_return=0.075, win_rate=50.0)
-    assert summary.horizon_stats["1d"] == HorizonStats(avg_return=0.25, win_rate=100.0)
+    assert summary.horizon_stats["1h"] == HorizonStats(avg_return=0.1, win_rate=100.0, observations=2)
+    assert summary.horizon_stats["4h"] == HorizonStats(avg_return=0.075, win_rate=50.0, observations=2)
+    assert summary.horizon_stats["1d"] == HorizonStats(avg_return=0.25, win_rate=100.0, observations=2)
     assert [row["symbol"] for row in summary.top_signals] == ["XRPUSDT", "SOLUSDT"]

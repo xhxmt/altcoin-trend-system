@@ -46,6 +46,13 @@ def _format_counts(counts: dict[str, int]) -> str:
     return " ".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
+def _parse_horizons_option(value: str):
+    try:
+        return parse_horizons(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @app.command("init-db")
 def init_db() -> None:
     settings = load_settings()
@@ -167,7 +174,7 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
 def backtest(
     from_ts: str = typer.Option(..., "--from"),
     to_ts: str = typer.Option(..., "--to"),
-    min_score: float = typer.Option(0.0, "--min-score"),
+    min_score: float = typer.Option(60.0, "--min-score"),
     horizons: str = typer.Option("1h,4h,24h,1d", "--horizons"),
     high_value_only: bool = typer.Option(False, "--high-value-only"),
     limit: int = typer.Option(10, "--limit", min=1),
@@ -184,7 +191,7 @@ def backtest(
         start=start,
         end=end,
         min_score=min_score,
-        horizons=parse_horizons(horizons),
+        horizons=_parse_horizons_option(horizons),
         high_value_only=high_value_only,
         limit=limit,
     )
@@ -201,7 +208,7 @@ def backtest(
     for horizon, stats in summary.horizon_stats.items():
         typer.echo(
             f"{horizon} avg_return={stats.avg_return * 100:.2f}% "
-            f"win_rate={stats.win_rate:.2f}%"
+            f"win_rate={stats.win_rate:.2f}% observations={stats.observations}"
         )
     typer.echo("Top signals:")
     for index, signal in enumerate(summary.top_signals, start=1):

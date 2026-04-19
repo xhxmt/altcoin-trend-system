@@ -15,6 +15,7 @@ from altcoin_trend.signals.alerts import is_high_value_signal
 class HorizonStats:
     avg_return: float
     win_rate: float
+    observations: int
 
 
 @dataclass(frozen=True)
@@ -80,11 +81,11 @@ def summarize_backtest(
     for horizon, values in returns_by_horizon.items():
         returns = list(values)
         if not returns:
-            horizon_stats[horizon] = HorizonStats(avg_return=0.0, win_rate=0.0)
+            horizon_stats[horizon] = HorizonStats(avg_return=0.0, win_rate=0.0, observations=0)
             continue
         average_return = round(sum(returns) / len(returns), 6)
         win_rate = round(sum(1 for value in returns if value > 0) / len(returns) * 100.0, 2)
-        horizon_stats[horizon] = HorizonStats(avg_return=average_return, win_rate=win_rate)
+        horizon_stats[horizon] = HorizonStats(avg_return=average_return, win_rate=win_rate, observations=len(returns))
 
     signal_rows.sort(key=lambda row: float(row.get("final_score", 0.0)), reverse=True)
     top_signals = signal_rows[:limit]

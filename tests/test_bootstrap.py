@@ -162,11 +162,15 @@ def test_bootstrap_exchange_filters_fetches_and_writes_market_rows(monkeypatch):
         lambda engine, instruments: {instrument.symbol: index + 10 for index, instrument in enumerate(instruments)},
     )
 
-    def fake_insert_rows(engine, table_name, rows):
-        inserted.append((table_name, list(rows)))
+    def fake_insert_market_rows_ignore_conflicts(engine, rows):
+        inserted.append(("alt_core.market_1m", list(rows)))
         return len(inserted[-1][1])
 
-    monkeypatch.setattr(bootstrap_module, "insert_rows", fake_insert_rows)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "insert_market_rows_ignore_conflicts",
+        fake_insert_market_rows_ignore_conflicts,
+    )
 
     result = bootstrap_exchange(
         adapter=adapter,

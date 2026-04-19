@@ -127,6 +127,37 @@ def test_insert_rows_executes_insert_for_matching_rows():
     ]
 
 
+def test_insert_market_rows_ignore_conflicts_uses_market_primary_key():
+    engine = _InsertFakeEngine()
+    rows = [
+        {
+            "asset_id": 1,
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "ts": "2026-01-01T00:00:00Z",
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+            "quote_volume": 1.0,
+            "trade_count": None,
+            "taker_buy_base": None,
+            "taker_buy_quote": None,
+            "data_status": "healthy",
+            "reason_codes": [],
+        }
+    ]
+
+    count = db.insert_market_rows_ignore_conflicts(engine, rows)
+
+    assert count == 1
+    statement, recorded_rows = engine.statements[0]
+    assert "INSERT INTO alt_core.market_1m" in statement
+    assert "ON CONFLICT (asset_id, ts) DO NOTHING" in statement
+    assert recorded_rows == rows
+
+
 def test_insert_rows_rejects_mismatched_row_shapes():
     engine = _InsertFakeEngine()
 

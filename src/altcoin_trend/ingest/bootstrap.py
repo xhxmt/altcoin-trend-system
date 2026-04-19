@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from altcoin_trend.config import AppSettings
-from altcoin_trend.db import insert_rows, upsert_instruments
+from altcoin_trend.db import insert_market_rows_ignore_conflicts, upsert_instruments
 from altcoin_trend.ingest.normalize import market_bar_to_row
 from altcoin_trend.models import Instrument
 
@@ -84,7 +84,7 @@ def bootstrap_exchange(
         asset_id = asset_ids[instrument.symbol]
         bars = adapter.fetch_klines_1m(instrument.symbol, start_ms, end_ms)
         rows = [market_bar_to_row(asset_id, bar) for bar in bars if bar.is_closed]
-        bars_written += insert_rows(engine, "alt_core.market_1m", rows)
+        bars_written += insert_market_rows_ignore_conflicts(engine, rows)
 
     return BootstrapResult(
         exchange=adapter.exchange,

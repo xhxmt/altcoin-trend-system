@@ -58,6 +58,32 @@ def insert_rows(engine: Engine, table_name: str, rows: Iterable[dict]) -> int:
     return len(rows)
 
 
+def insert_market_rows_ignore_conflicts(engine: Engine, rows: Iterable[dict]) -> int:
+    rows = list(rows)
+    if not rows:
+        return 0
+
+    first_row_keys = set(rows[0].keys())
+    for row in rows[1:]:
+        if set(row.keys()) != first_row_keys:
+            raise ValueError("All rows must have the same key set")
+
+    columns = list(rows[0].keys())
+    if any(not isinstance(column, str) or _SAFE_IDENTIFIER_RE.fullmatch(column) is None for column in columns):
+        raise ValueError("Invalid column name in market rows")
+    column_sql = ", ".join(columns)
+    placeholder_sql = ", ".join(f":{column}" for column in columns)
+    statement = text(
+        f"INSERT INTO alt_core.market_1m ({column_sql}) VALUES ({placeholder_sql}) "
+        "ON CONFLICT (asset_id, ts) DO NOTHING"
+    )
+
+    with engine.begin() as connection:
+        result = connection.execute(statement, rows)
+        rowcount = getattr(result, "rowcount", None)
+    return int(rowcount) if rowcount is not None and rowcount >= 0 else len(rows)
+
+
 def upsert_instruments(engine: Engine, instruments: Iterable[Instrument]) -> dict[str, int]:
     rows = [
         {

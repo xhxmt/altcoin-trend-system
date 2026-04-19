@@ -210,3 +210,30 @@ def test_build_explain_text_normalizes_veto_from_list_string_missing_and_none():
     assert "Veto: r1" in string_text
     assert "Veto: none" in missing_text
     assert "Veto: none" in none_text
+
+
+def test_build_explain_text_includes_relative_strength_values_and_missing_as_na():
+    text = build_explain_text(
+        {
+            "exchange": "binance",
+            "symbol": "SOLUSDT",
+            "final_score": 88.4,
+            "tier": "strong",
+            "trend_score": 92.0,
+            "volume_breakout_score": 81.0,
+            "relative_strength_score": 77.5,
+            "derivatives_score": 64.0,
+            "quality_score": 90.0,
+            "rs_btc_7d": 12.34567,
+            "rs_eth_7d": None,
+            "rs_btc_30d": -1.25,
+            "rs_eth_30d": 4.0,
+            "veto_reason_codes": [],
+        }
+    )
+
+    assert "Relative strength:" in text
+    assert "RS vs BTC 7d: 12.35" in text
+    assert "RS vs ETH 7d: n/a" in text
+    assert "RS vs BTC 30d: -1.25" in text
+    assert "RS vs ETH 30d: 4.00" in text

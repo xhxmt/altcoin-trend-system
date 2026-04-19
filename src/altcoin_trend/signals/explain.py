@@ -10,6 +10,15 @@ def _get(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
     return getattr(row, key, default)
 
 
+def _format_optional_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def build_explain_text(row: Mapping[str, Any] | Any) -> str:
     exchange = _get(row, "exchange", "unknown")
     symbol = row["symbol"] if isinstance(row, Mapping) else getattr(row, "symbol")
@@ -33,6 +42,11 @@ def build_explain_text(row: Mapping[str, Any] | Any) -> str:
         f"Relative strength: {_get(row, 'relative_strength_score', 'n/a')}",
         f"Derivatives: {_get(row, 'derivatives_score', 'n/a')}",
         f"Quality: {_get(row, 'quality_score', 'n/a')}",
+        "Relative strength:",
+        f"RS vs BTC 7d: {_format_optional_float(_get(row, 'rs_btc_7d', None))}",
+        f"RS vs ETH 7d: {_format_optional_float(_get(row, 'rs_eth_7d', None))}",
+        f"RS vs BTC 30d: {_format_optional_float(_get(row, 'rs_btc_30d', None))}",
+        f"RS vs ETH 30d: {_format_optional_float(_get(row, 'rs_eth_30d', None))}",
     ]
     if veto:
         lines.append(f"Veto: {', '.join(veto)}")

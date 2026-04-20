@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
+from psycopg.types.json import Jsonb
 
 from altcoin_trend.scheduler import RunOnceResult, build_snapshot_rows, process_alerts, run_once_pipeline
 
@@ -221,6 +222,95 @@ def test_build_snapshot_rows_uses_data_driven_derivatives_score():
     assert row["oi_delta_4h"] > 0
     assert row["taker_buy_sell_ratio"] > 1.0
     assert row["derivatives_score"] > 50.0
+
+
+def test_build_snapshot_rows_marks_research_trade_candidate():
+    snapshot_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    rows = []
+    for hour in range(24 * 31):
+        ts = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(hours=hour)
+        btc_close = 100.0 + hour * 0.01
+        eth_close = 100.0 + hour * 0.01
+        strong_close = 100.0 + hour * 0.01
+        weak_close = 100.0 + hour * 0.005
+        if hour >= 24 * 30 - 24:
+            strong_close += (hour - (24 * 30 - 24)) * 0.7
+        if hour == 24 * 31 - 1:
+            strong_close *= 1.13
+        for asset_id, symbol, close, quote_volume in (
+            (1, "BTCUSDT", btc_close, 1000.0),
+            (2, "ETHUSDT", eth_close, 1000.0),
+            (3, "FASTUSDT", strong_close, 1000.0),
+            (4, "SLOWUSDT", weak_close, 1000.0),
+        ):
+            volume = quote_volume
+            if symbol == "FASTUSDT" and hour == 24 * 31 - 1:
+                volume = 10_000.0
+            rows.append(
+                {
+                    "asset_id": asset_id,
+                    "exchange": "binance",
+                    "symbol": symbol,
+                    "base_asset": symbol.removesuffix("USDT"),
+                    "ts": ts,
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "volume": volume,
+                    "quote_volume": volume,
+                }
+            )
+
+    feature_rows, rank_rows = build_snapshot_rows(pd.DataFrame(rows), snapshot_ts)
+    by_symbol = {row["symbol"]: row for row in feature_rows}
+
+    assert by_symbol["FASTUSDT"]["return_1h_pct"] >= 6.0
+    assert by_symbol["FASTUSDT"]["return_4h_pct"] >= 10.0
+    assert by_symbol["FASTUSDT"]["return_24h_pct"] >= 12.0
+    assert by_symbol["FASTUSDT"]["volume_ratio_24h"] >= 5.0
+    assert by_symbol["FASTUSDT"]["return_24h_percentile"] >= 0.94
+    assert by_symbol["FASTUSDT"]["return_7d_percentile"] >= 0.84
+    assert by_symbol["FASTUSDT"]["trade_candidate"] is True
+    assert by_symbol["SLOWUSDT"]["trade_candidate"] is False
+    assert next(row for row in rank_rows if row["symbol"] == "FASTUSDT")["payload"]["trade_candidate"] is True
+
+
+def test_write_run_once_snapshots_preserves_rank_payload(monkeypatch):
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "SOLUSDT",
+                "base_asset": "SOL",
+                "ts": "2026-01-01T00:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+            }
+        ]
+    )
+    inserted = []
+
+    monkeypatch.setattr("altcoin_trend.scheduler._load_market_rows", lambda engine: market_rows)
+
+    def fake_insert_rows(engine, table_name, rows):
+        inserted.append((table_name, list(rows)))
+        return len(inserted[-1][1])
+
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", fake_insert_rows)
+
+    from altcoin_trend.scheduler import write_run_once_snapshots
+
+    write_run_once_snapshots(object(), snapshot_ts=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    rank_rows = next(rows for table_name, rows in inserted if table_name == "alt_signal.rank_snapshot")
+    assert isinstance(rank_rows[0]["payload"], Jsonb)
+    assert rank_rows[0]["payload"].obj == {"trade_candidate": False}
 
 
 def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():

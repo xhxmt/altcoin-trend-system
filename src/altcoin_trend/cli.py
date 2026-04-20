@@ -11,10 +11,17 @@ from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
 from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.ingest.derivatives import bootstrap_derivatives
-from altcoin_trend.scheduler import load_explain_row, load_rank_rows, process_alerts, run_once_pipeline
+from altcoin_trend.scheduler import (
+    load_explain_row,
+    load_rank_rows,
+    load_trade_candidate_rows,
+    process_alerts,
+    run_once_pipeline,
+)
 from altcoin_trend.signals.explain import build_explain_text
 from altcoin_trend.signals.ranking import aggregate_rank_rows_by_symbol
 from altcoin_trend.signals.telegram import TelegramClient
+from altcoin_trend.trade_backtest import run_trade_candidate_backtest
 
 app = typer.Typer(help="Altcoin trend system CLI")
 
@@ -177,6 +184,66 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
         telegram_client=telegram_client,
     )
     typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={since}")
+
+
+@app.command("trade-candidates")
+def trade_candidates(limit: int = typer.Option(30, "--limit", min=1)) -> None:
+    settings = load_settings()
+    engine = build_engine(settings)
+    rows = load_trade_candidate_rows(engine, limit=limit)
+    if not rows:
+        typer.echo("No trade candidates found in latest snapshot")
+        return
+    typer.echo(f"Trade candidates limit={limit}")
+    for index, row in enumerate(rows, start=1):
+        typer.echo(
+            f"{index}. {row['exchange']}:{row['symbol']} score={row['final_score']} tier={row['tier']} "
+            f"r1h={float(row['return_1h_pct']):.2f}% r4h={float(row['return_4h_pct']):.2f}% "
+            f"r24h={float(row['return_24h_pct']):.2f}% vol24h={float(row['volume_ratio_24h']):.2f}x"
+        )
+
+
+@app.command("evaluate-trade-candidates")
+def evaluate_trade_candidates(
+    from_ts: str = typer.Option(..., "--from"),
+    to_ts: str = typer.Option(..., "--to"),
+    exchange: str = typer.Option("binance", "--exchange"),
+    target_return: float = typer.Option(0.10, "--target-return"),
+    limit: int = typer.Option(10, "--limit", min=1),
+) -> None:
+    start = _parse_iso_datetime(from_ts)
+    end = _parse_iso_datetime(to_ts)
+    if start >= end:
+        raise typer.BadParameter("--from must be earlier than --to")
+    settings = load_settings()
+    engine = build_engine(settings)
+    summary = run_trade_candidate_backtest(
+        engine=engine,
+        exchange=exchange,
+        start=start,
+        end=end,
+        target_return=target_return,
+        limit=limit,
+    )
+    typer.echo(
+        f"Trade candidate backtest exchange={exchange} from={start.isoformat()} to={end.isoformat()} "
+        f"signals={summary.signal_count} hits={summary.hit_count} precision={summary.precision:.2f}%"
+    )
+    typer.echo(
+        f"1h max_return avg={summary.avg_future_max_return * 100:.2f}% "
+        f"median={summary.median_future_max_return * 100:.2f}% "
+        f"best={summary.best_future_max_return * 100:.2f}%"
+    )
+    if not summary.top_signals:
+        return
+    typer.echo("Top signals:")
+    for index, signal in enumerate(summary.top_signals, start=1):
+        typer.echo(
+            f"{index}. {signal['exchange']}:{signal['symbol']} ts={signal['ts']} "
+            f"future_max={signal['future_max_return_1h'] * 100:.2f}% "
+            f"r1h={signal['return_1h_pct']:.2f}% r4h={signal['return_4h_pct']:.2f}% "
+            f"r24h={signal['return_24h_pct']:.2f}% vol24h={signal['volume_ratio_24h']:.2f}x"
+        )
 
 
 @app.command("backtest")

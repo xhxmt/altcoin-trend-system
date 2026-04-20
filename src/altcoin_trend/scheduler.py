@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
+from psycopg.types.json import Jsonb
 from sqlalchemy import Engine, text
 
 from altcoin_trend.db import insert_rows
@@ -17,6 +18,7 @@ from altcoin_trend.features.scoring import ScoreInput, compute_final_score
 from altcoin_trend.signals.alerts import build_alert_event_rows
 from altcoin_trend.signals.ranking import rank_scores
 from altcoin_trend.signals.telegram import TelegramClient
+from altcoin_trend.signals.trade_candidate import is_trade_candidate
 
 
 @dataclass(frozen=True)
@@ -110,9 +112,44 @@ def _latest_value(frame: pd.DataFrame, column: str) -> float | None:
     return float(value)
 
 
+def _return_pct_since(ordered: pd.DataFrame, hours: int) -> float | None:
+    if ordered.empty:
+        return None
+    latest = ordered.iloc[-1]
+    latest_close = float(latest["close"])
+    anchor_ts = latest["ts"] - pd.Timedelta(hours=hours)
+    history = ordered[ordered["ts"] <= anchor_ts]
+    if history.empty:
+        return None
+    anchor_close = float(history.iloc[-1]["close"])
+    if anchor_close <= 0:
+        return None
+    return ((latest_close / anchor_close) - 1.0) * 100.0
+
+
+def _trailing_volume_ratio_24h(ordered: pd.DataFrame) -> float | None:
+    if ordered.empty or "quote_volume" not in ordered.columns:
+        return None
+    latest_ts = ordered["ts"].iloc[-1]
+    current_start = latest_ts - pd.Timedelta(hours=1)
+    lookback_start = latest_ts - pd.Timedelta(hours=24)
+    current_volume = float(ordered[ordered["ts"] > current_start]["quote_volume"].sum())
+    lookback_volume = float(ordered[ordered["ts"] > lookback_start]["quote_volume"].sum())
+    average_hourly_volume = lookback_volume / 24.0 if lookback_volume > 0 else 0.0
+    if average_hourly_volume <= 0:
+        return None
+    return current_volume / average_hourly_volume
+
+
 def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
     working = _frame_with_required_columns(group)
     features: dict[str, Any] = {
+        "return_1h_pct": None,
+        "return_4h_pct": None,
+        "return_24h_pct": None,
+        "return_7d_pct": None,
+        "return_30d_pct": None,
+        "volume_ratio_24h": None,
         "ema20_4h": None,
         "ema60_4h": None,
         "ema20_1d": None,
@@ -155,6 +192,15 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
 
     if not working.empty:
         ordered = working.sort_values("ts")
+        for hours, key in (
+            (1, "return_1h_pct"),
+            (4, "return_4h_pct"),
+            (24, "return_24h_pct"),
+            (24 * 7, "return_7d_pct"),
+            (24 * 30, "return_30d_pct"),
+        ):
+            features[key] = _return_pct_since(ordered, hours)
+        features["volume_ratio_24h"] = _trailing_volume_ratio_24h(ordered)
         latest = ordered.iloc[-1]
         latest_close = float(latest["close"])
         for days, key in ((7, "return_7d"), (30, "return_30d")):
@@ -167,6 +213,24 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
                 features[key] = ((latest_close / anchor_close) - 1.0) * 100.0
 
     return features
+
+
+def _assign_return_percentiles(feature_rows: list[dict[str, Any]]) -> None:
+    if not feature_rows:
+        return
+    frame = pd.DataFrame(feature_rows)
+    for source_column, output_column in (
+        ("return_24h_pct", "return_24h_percentile"),
+        ("return_7d_pct", "return_7d_percentile"),
+    ):
+        if source_column not in frame.columns:
+            for row in feature_rows:
+                row[output_column] = None
+            continue
+        frame[output_column] = frame.groupby("exchange")[source_column].rank(pct=True)
+        for index, row in enumerate(feature_rows):
+            value = frame.iloc[index][output_column]
+            row[output_column] = None if pd.isna(value) else float(value)
 
 
 def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -234,6 +298,10 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
             }
         )
 
+    _assign_return_percentiles(feature_rows)
+    for row in feature_rows:
+        row["trade_candidate"] = is_trade_candidate(row)
+
     rank_rows: list[dict[str, Any]] = []
     for scope, rows in (("all", feature_rows),):
         rank_rows.extend(_rank_rows_for_scope(rows, scope))
@@ -255,6 +323,7 @@ def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[st
             "final_score": row["final_score"],
             "tier": row["tier"],
             "primary_reason": row["primary_reason"] or None,
+            "payload": {"trade_candidate": bool(row.get("trade_candidate", False))},
         }
         for row in ranked
     ]
@@ -315,7 +384,14 @@ def write_run_once_snapshots(engine: Engine, snapshot_ts: datetime | None = None
         for row in feature_rows
     ]
     features_written = insert_rows(engine, "alt_signal.feature_snapshot", feature_insert_rows)
-    ranks_written = insert_rows(engine, "alt_signal.rank_snapshot", rank_rows)
+    rank_insert_rows = [
+        {
+            **row,
+            "payload": Jsonb(row["payload"]),
+        }
+        for row in rank_rows
+    ]
+    ranks_written = insert_rows(engine, "alt_signal.rank_snapshot", rank_insert_rows)
     return features_written, ranks_written
 
 
@@ -338,6 +414,15 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
             fs.relative_strength_score,
             fs.derivatives_score,
             fs.quality_score,
+            fs.return_1h_pct,
+            fs.return_4h_pct,
+            fs.return_24h_pct,
+            fs.return_7d_pct,
+            fs.return_30d_pct,
+            fs.volume_ratio_24h,
+            fs.return_24h_percentile,
+            fs.return_7d_percentile,
+            fs.trade_candidate,
             fs.oi_delta_1h,
             fs.oi_delta_4h,
             fs.funding_zscore,
@@ -363,6 +448,48 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
         return [dict(row) for row in result.mappings().all()]
 
 
+def load_trade_candidate_rows(engine: Engine, limit: int = 30) -> list[dict[str, Any]]:
+    statement = text(
+        """
+        SELECT
+            fs.ts,
+            fs.asset_id,
+            fs.exchange,
+            fs.symbol,
+            a.base_asset,
+            fs.close,
+            fs.final_score,
+            fs.trade_candidate,
+            fs.return_1h_pct,
+            fs.return_4h_pct,
+            fs.return_24h_pct,
+            fs.return_7d_pct,
+            fs.return_30d_pct,
+            fs.volume_ratio_24h,
+            fs.return_24h_percentile,
+            fs.return_7d_percentile,
+            COALESCE(r.tier, 'rejected') AS tier,
+            COALESCE(r.rank, 0) AS rank
+        FROM alt_signal.feature_snapshot AS fs
+        JOIN alt_core.asset_master AS a ON a.asset_id = fs.asset_id
+        LEFT JOIN alt_signal.rank_snapshot AS r
+          ON r.asset_id = fs.asset_id
+         AND r.ts = fs.ts
+         AND r.rank_scope = 'all'
+        WHERE fs.ts = (
+              SELECT MAX(ts)
+              FROM alt_signal.feature_snapshot
+          )
+          AND fs.trade_candidate = TRUE
+        ORDER BY fs.final_score DESC, fs.return_24h_pct DESC
+        LIMIT :limit
+        """
+    )
+    with engine.begin() as connection:
+        result = connection.execute(statement, {"limit": limit})
+        return [dict(row) for row in result.mappings().all()]
+
+
 def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, Any] | None:
     statement = text(
         """
@@ -374,6 +501,15 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
             a.base_asset,
             fs.close,
             fs.ema20_1m,
+            fs.return_1h_pct,
+            fs.return_4h_pct,
+            fs.return_24h_pct,
+            fs.return_7d_pct,
+            fs.return_30d_pct,
+            fs.volume_ratio_24h,
+            fs.return_24h_percentile,
+            fs.return_7d_percentile,
+            fs.trade_candidate,
             fs.trend_score,
             fs.volume_breakout_score,
             fs.relative_strength_score,

@@ -7,6 +7,14 @@ CREATE TABLE IF NOT EXISTS alt_signal.feature_snapshot (
     symbol TEXT NOT NULL,
     close DOUBLE PRECISION NOT NULL,
     ema20_1m DOUBLE PRECISION,
+    return_1h_pct DOUBLE PRECISION,
+    return_4h_pct DOUBLE PRECISION,
+    return_24h_pct DOUBLE PRECISION,
+    return_7d_pct DOUBLE PRECISION,
+    return_30d_pct DOUBLE PRECISION,
+    volume_ratio_24h DOUBLE PRECISION,
+    return_24h_percentile DOUBLE PRECISION,
+    return_7d_percentile DOUBLE PRECISION,
     ema20_4h DOUBLE PRECISION,
     ema60_4h DOUBLE PRECISION,
     ema20_1d DOUBLE PRECISION,
@@ -29,6 +37,7 @@ CREATE TABLE IF NOT EXISTS alt_signal.feature_snapshot (
     derivatives_score DOUBLE PRECISION NOT NULL,
     quality_score DOUBLE PRECISION NOT NULL,
     final_score DOUBLE PRECISION NOT NULL,
+    trade_candidate BOOLEAN NOT NULL DEFAULT FALSE,
     veto_reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
     PRIMARY KEY (asset_id, ts)
 );

@@ -21,6 +21,8 @@ def test_cli_help_lists_mvp_commands():
     assert "alerts" in result.output
     assert "explain" in result.output
     assert "backtest" in result.output
+    assert "trade-candidates" in result.output
+    assert "evaluate-trade-candidates" in result.output
 
 
 def test_cli_bootstrap_uses_loaded_settings(monkeypatch):

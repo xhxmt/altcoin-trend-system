@@ -23,6 +23,7 @@ def test_cli_help_lists_mvp_commands():
     assert "backtest" in result.output
     assert "trade-candidates" in result.output
     assert "evaluate-trade-candidates" in result.output
+    assert "health" in result.output
 
 
 def test_cli_bootstrap_uses_loaded_settings(monkeypatch):
@@ -237,6 +238,17 @@ def test_cli_status_reports_loaded_settings(monkeypatch):
 
     assert result.exit_code == 0
     assert "Status: configured exchanges=binance,bybit interval=90s" in result.output
+
+
+def test_cli_health_prints_health_report(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr("altcoin_trend.cli.collect_health", lambda engine: "health text")
+
+    result = CliRunner().invoke(app, ["health"])
+
+    assert result.exit_code == 0
+    assert result.output == "health text\n"
 
 
 def test_cli_alerts_processes_pending_alerts(monkeypatch):

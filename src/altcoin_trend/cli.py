@@ -9,6 +9,7 @@ from altcoin_trend.daemon import sync_market_inputs
 from altcoin_trend.db import build_engine, run_all_migrations
 from altcoin_trend.exchanges.binance import BinancePublicAdapter
 from altcoin_trend.exchanges.bybit import BybitPublicAdapter
+from altcoin_trend.health import collect_health
 from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.ingest.derivatives import bootstrap_derivatives
 from altcoin_trend.scheduler import (
@@ -165,6 +166,13 @@ def status() -> None:
         f"Status: configured exchanges={','.join(settings.exchanges)} "
         f"interval={settings.signal_interval_seconds}s"
     )
+
+
+@app.command("health")
+def health() -> None:
+    settings = load_settings()
+    engine = build_engine(settings)
+    typer.echo(collect_health(engine))
 
 
 @app.command("alerts")

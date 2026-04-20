@@ -25,6 +25,7 @@ acts init-db
 acts bootstrap --lookback-days 90
 acts bootstrap-derivatives --lookback-days 31
 acts run-once
+acts health
 acts rank --limit 30
 acts backtest --from 2026-04-19 --to 2026-04-20 --min-score 60
 acts explain SOLUSDT --exchange binance

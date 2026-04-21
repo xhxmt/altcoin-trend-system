@@ -110,6 +110,7 @@ def compute_forward_path_labels(
         "4h": signal_ts_utc + pd.Timedelta(hours=4),
         "24h": signal_ts_utc + pd.Timedelta(hours=24),
     }
+    horizon_24h = windows["24h"]
 
     for window_name, window_end in windows.items():
         window_rows = future[future["ts"] <= window_end]
@@ -126,7 +127,7 @@ def compute_forward_path_labels(
     ):
         target_price = round(close * (1.0 + target_pct), 12)
         drawdown_price = round(close * (1.0 - drawdown_pct), 12)
-        for row in future.itertuples(index=False):
+        for row in future[future["ts"] <= horizon_24h].itertuples(index=False):
             row_high = float(row.high)
             row_low = float(row.low)
             if row_low <= drawdown_price:
@@ -456,5 +457,18 @@ def run_signal_v2_backtest(
         labels = compute_forward_path_labels(row["ts"], row["close"], asset_features[["ts", "high", "low"]])
         for key, value in labels.items():
             window.at[idx, key] = value
+
+    def _has_value(value: Any) -> bool:
+        if pd.isna(value):
+            return False
+        return str(value).strip() != ""
+
+    signal_priority = pd.to_numeric(window["signal_priority"], errors="coerce") if "signal_priority" in window.columns else pd.Series(0.0, index=window.index)
+    continuation_signal = window["continuation_grade"].map(_has_value) if "continuation_grade" in window.columns else pd.Series(False, index=window.index)
+    ignition_signal = window["ignition_grade"].map(_has_value) if "ignition_grade" in window.columns else pd.Series(False, index=window.index)
+    signal_mask = (signal_priority.fillna(0.0) > 0) | continuation_signal.fillna(False) | ignition_signal.fillna(False)
+    window = window[signal_mask].copy()
+    if window.empty:
+        return summarize_signal_v2_groups(pd.DataFrame())
 
     return summarize_signal_v2_groups(window)

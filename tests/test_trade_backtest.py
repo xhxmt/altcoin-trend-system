@@ -1,12 +1,6 @@
 from datetime import datetime, timezone
-from pathlib import Path
-import sys
 
 import pandas as pd
-
-WORKTREE_SRC = Path(__file__).resolve().parents[1] / "src"
-if str(WORKTREE_SRC) not in sys.path:
-    sys.path.insert(0, str(WORKTREE_SRC))
 
 from altcoin_trend.trade_backtest import (
     compute_forward_path_labels,
@@ -302,6 +296,27 @@ def test_compute_forward_path_labels_detects_drawdown_before_target():
     assert labels["time_to_hit_10pct_minutes"] is None
 
 
+def test_compute_forward_path_labels_ignores_target_hits_beyond_24h():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T12:00:00Z"), "high": 101.0, "low": 99.5},
+            {"ts": pd.Timestamp("2026-01-02T00:00:00Z"), "high": 104.0, "low": 98.0},
+            {"ts": pd.Timestamp("2026-01-02T01:00:00Z"), "high": 111.0, "low": 100.0},
+            {"ts": pd.Timestamp("2026-01-02T02:00:00Z"), "high": 112.0, "low": 99.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["mfe_24h_pct"] == 4.0
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["time_to_hit_10pct_minutes"] is None
+
+
 def test_compute_forward_path_labels_prefers_drawdown_when_same_row_hits_both():
     future = pd.DataFrame(
         [
@@ -397,6 +412,46 @@ def test_run_signal_v2_backtest_uses_real_forward_path_labels_and_ohlcv_defaults
     assert summary["ignition_EXTREME"]["avg_mae_4h_pct"] == 2.222222
     assert summary["ignition_EXTREME"]["avg_mae_24h_pct"] == 4.444444
     assert summary["ignition_EXTREME"]["hit_10pct_before_drawdown_8pct_rate"] == 100.0
+
+
+def test_run_signal_v2_backtest_ignores_non_signal_rows_in_summary(monkeypatch):
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "NONSIGNALUSDT",
+                "ts": pd.Timestamp("2026-01-02T00:00:00Z"),
+                "open": 100.0,
+                "high": 100.0,
+                "low": 100.0,
+                "close": 100.0,
+                "volume": 1000.0,
+                "quote_volume": 1000.0,
+                "trade_count": 1,
+                "signal_priority": 0,
+                "continuation_grade": "",
+                "ignition_grade": None,
+                "chase_risk_score": 80.0,
+                "cross_exchange_confirmed": False,
+            }
+        ]
+    )
+
+    monkeypatch.setattr("altcoin_trend.trade_backtest._fetch_market_rows", lambda engine, exchange, start, end: market_rows)
+    monkeypatch.setattr("altcoin_trend.trade_backtest.resample_market_1m", lambda group, timeframe: group.copy())
+    monkeypatch.setattr("altcoin_trend.trade_backtest._prepare_feature_frame", lambda bars_1h: bars_1h.copy())
+
+    summary = run_signal_v2_backtest(
+        engine=object(),
+        exchange="binance",
+        start=datetime(2026, 1, 2, 0, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 1, 2, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert summary["single_exchange_triggered"]["signal_count"] == 0
+    assert summary["high_chase_risk"]["signal_count"] == 0
+    assert summary["low_or_medium_chase_risk"]["signal_count"] == 0
 
 
 def test_summarize_signal_v2_groups_reports_by_grade():
@@ -576,6 +631,9 @@ def test_run_signal_v2_backtest_filters_window_before_summarizing(monkeypatch):
                 "volume": 10.0,
                 "quote_volume": 10.0,
                 "trade_count": 1,
+                "signal_priority": 0,
+                "continuation_grade": "",
+                "ignition_grade": None,
             },
             {
                 "asset_id": 1,
@@ -589,6 +647,9 @@ def test_run_signal_v2_backtest_filters_window_before_summarizing(monkeypatch):
                 "volume": 10.0,
                 "quote_volume": 10.0,
                 "trade_count": 1,
+                "signal_priority": 0,
+                "continuation_grade": "",
+                "ignition_grade": None,
             },
             {
                 "asset_id": 1,
@@ -602,6 +663,9 @@ def test_run_signal_v2_backtest_filters_window_before_summarizing(monkeypatch):
                 "volume": 10.0,
                 "quote_volume": 10.0,
                 "trade_count": 1,
+                "signal_priority": 1,
+                "continuation_grade": "A",
+                "ignition_grade": None,
             },
         ]
     )

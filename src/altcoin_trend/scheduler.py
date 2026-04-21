@@ -15,7 +15,7 @@ from altcoin_trend.features.indicators import add_ema, adx, atr
 from altcoin_trend.features.relative_strength import RelativeStrengthFeature, build_relative_strength_features
 from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.features.scoring import ScoreInput, compute_final_score, max_tier
-from altcoin_trend.signals.alerts import build_alert_event_rows
+from altcoin_trend.signals.alerts import MAX_SIGNAL_V2_COOLDOWN_SECONDS, build_alert_event_rows
 from altcoin_trend.signals.ranking import rank_scores
 from altcoin_trend.signals.telegram import TelegramClient
 from altcoin_trend.signals.v2 import compute_volume_impulse_score, evaluate_signal_v2
@@ -720,7 +720,7 @@ def process_alerts(
     rank_limit: int = 30,
 ) -> tuple[int, int]:
     rank_rows = load_rank_rows(engine, rank_scope="all", limit=rank_limit)
-    since = now - timedelta(seconds=cooldown_seconds)
+    since = now - timedelta(seconds=max(cooldown_seconds, MAX_SIGNAL_V2_COOLDOWN_SECONDS))
     recent_events = _load_recent_alert_events(engine, since)
     alert_rows = build_alert_event_rows(
         rank_rows=rank_rows,

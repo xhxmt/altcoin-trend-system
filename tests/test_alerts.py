@@ -379,6 +379,334 @@ def test_build_alert_event_rows_creates_explosive_move_early_alert_independent_o
     assert duplicate_events == []
 
 
+def test_build_alert_event_rows_creates_ignition_extreme_event():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 21,
+        "exchange": "binance",
+        "symbol": "RAVEUSDT",
+        "tier": "strong",
+        "final_score": 63.0,
+        "trend_score": 67.0,
+        "volume_breakout_score": 35.0,
+        "volume_impulse_score": 48.0,
+        "relative_strength_score": 92.0,
+        "derivatives_score": 31.0,
+        "quality_score": 100.0,
+        "return_1h_pct": 22.0,
+        "return_24h_pct": 80.0,
+        "continuation_grade": None,
+        "ignition_grade": "EXTREME",
+        "signal_priority": 3,
+        "risk_flags": ["EXTREME_MOVE", "CHASE_RISK"],
+        "chase_risk_score": 80.0,
+        "actionability_score": 55.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert events[0]["alert_type"] == "ignition_extreme"
+    assert "[IGNITION_EXTREME] RAVEUSDT" in events[0]["message"]
+    assert events[0]["payload"]["priority"] == "P1"
+    assert events[0]["payload"]["continuation_grade"] is None
+    assert events[0]["payload"]["ignition_grade"] == "EXTREME"
+    assert events[0]["payload"]["grades"] == {"continuation": None, "ignition": "EXTREME"}
+
+
+@pytest.mark.parametrize(("grade", "priority"), [("A", "P1"), ("B", "P2")])
+def test_build_alert_event_rows_creates_continuation_confirmed_event_with_priority(grade, priority):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 22,
+        "exchange": "binance",
+        "symbol": "SOLUSDT",
+        "tier": "strong",
+        "final_score": 88.4,
+        "trend_score": 90.0,
+        "volume_breakout_score": 80.0,
+        "volume_impulse_score": 61.0,
+        "relative_strength_score": 75.0,
+        "derivatives_score": 60.0,
+        "quality_score": 100.0,
+        "return_1h_pct": 2.0,
+        "return_24h_pct": 9.0,
+        "continuation_grade": grade,
+        "ignition_grade": None,
+        "signal_priority": 1,
+        "risk_flags": [],
+        "chase_risk_score": 20.0,
+        "actionability_score": 89.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "continuation_confirmed"
+    assert f"[CONTINUATION_{grade}] SOLUSDT" in events[0]["message"]
+    assert events[0]["payload"]["priority"] == priority
+    assert events[0]["payload"]["continuation_grade"] == grade
+    assert events[0]["payload"]["ignition_grade"] is None
+    assert events[0]["payload"]["grades"] == {"continuation": grade, "ignition": None}
+
+
+@pytest.mark.parametrize(("grade", "priority"), [("A", "P2"), ("B", "P3")])
+def test_build_alert_event_rows_creates_ignition_detected_event_with_priority(grade, priority):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 23,
+        "exchange": "binance",
+        "symbol": "RAYUSDT",
+        "tier": "watchlist",
+        "final_score": 76.0,
+        "trend_score": 75.0,
+        "volume_breakout_score": 50.0,
+        "volume_impulse_score": 70.0,
+        "relative_strength_score": 84.0,
+        "derivatives_score": 59.0,
+        "quality_score": 90.0,
+        "return_1h_pct": 8.0,
+        "return_24h_pct": 25.0,
+        "continuation_grade": None,
+        "ignition_grade": grade,
+        "signal_priority": 2,
+        "risk_flags": [],
+        "chase_risk_score": 40.0,
+        "actionability_score": 72.0,
+        "cross_exchange_confirmed": False,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "ignition_detected"
+    assert f"[IGNITION_{grade}] RAYUSDT" in events[0]["message"]
+    assert events[0]["payload"]["priority"] == priority
+
+
+def test_build_alert_event_rows_creates_exhaustion_risk_without_grade_when_chase_risk_is_high():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 24,
+        "exchange": "binance",
+        "symbol": "HOTUSDT",
+        "tier": "watchlist",
+        "final_score": 71.0,
+        "trend_score": 65.0,
+        "volume_breakout_score": 30.0,
+        "volume_impulse_score": 32.0,
+        "relative_strength_score": 78.0,
+        "derivatives_score": 45.0,
+        "quality_score": 85.0,
+        "return_1h_pct": 10.0,
+        "return_24h_pct": 42.0,
+        "continuation_grade": None,
+        "ignition_grade": None,
+        "signal_priority": 3,
+        "risk_flags": ["CHASE_RISK"],
+        "chase_risk_score": 80.0,
+        "actionability_score": 38.0,
+        "cross_exchange_confirmed": False,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "exhaustion_risk"
+    assert "[EXHAUSTION_RISK] HOTUSDT" in events[0]["message"]
+    assert events[0]["payload"]["priority"] == "P2"
+
+
+def test_build_alert_event_rows_prefers_v2_event_over_duplicate_legacy_transition():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 25,
+        "exchange": "binance",
+        "symbol": "ADAUSDT",
+        "tier": "strong",
+        "final_score": 88.4,
+        "trend_score": 90.0,
+        "volume_breakout_score": 80.0,
+        "volume_impulse_score": 63.0,
+        "relative_strength_score": 75.0,
+        "derivatives_score": 60.0,
+        "quality_score": 100.0,
+        "return_1h_pct": 1.5,
+        "return_24h_pct": 7.0,
+        "continuation_grade": "A",
+        "ignition_grade": None,
+        "signal_priority": 1,
+        "risk_flags": [],
+        "chase_risk_score": 15.0,
+        "actionability_score": 94.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "continuation_confirmed"
+    assert events[0]["alert_type"] not in {"strong_trend", "breakout_confirmed"}
+
+
+def test_build_alert_event_rows_keeps_explosive_alert_with_v2_and_skips_legacy_transition():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 28,
+        "exchange": "binance",
+        "symbol": "RAVEUSDT",
+        "tier": "strong",
+        "final_score": 91.0,
+        "trend_score": 90.0,
+        "volume_breakout_score": 80.0,
+        "volume_impulse_score": 88.0,
+        "relative_strength_score": 92.0,
+        "derivatives_score": 60.0,
+        "quality_score": 100.0,
+        "return_1h_pct": 22.0,
+        "return_4h_pct": 28.0,
+        "return_24h_pct": 80.0,
+        "return_24h_percentile": 0.98,
+        "continuation_grade": None,
+        "ignition_grade": "EXTREME",
+        "signal_priority": 3,
+        "risk_flags": ["EXTREME_MOVE", "CHASE_RISK"],
+        "chase_risk_score": 80.0,
+        "actionability_score": 55.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    alert_types = [event["alert_type"] for event in events]
+    assert alert_types == ["ignition_extreme", "explosive_move_early"]
+    assert "strong_trend" not in alert_types
+    assert "breakout_confirmed" not in alert_types
+
+
+def test_build_alert_event_rows_keeps_legacy_alert_for_strong_row_without_v2_grades():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 26,
+        "exchange": "binance",
+        "symbol": "DOGEUSDT",
+        "tier": "strong",
+        "final_score": 88.4,
+        "trend_score": 90.0,
+        "volume_breakout_score": 80.0,
+        "relative_strength_score": 75.0,
+        "derivatives_score": 60.0,
+        "quality_score": 100.0,
+        "continuation_grade": None,
+        "ignition_grade": None,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "strong_trend"
+    assert "[STRONG] DOGEUSDT Binance" in events[0]["message"]
+
+
+def test_build_alert_event_rows_uses_priority_cooldown_for_p3_ignition_detected():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 27,
+        "exchange": "binance",
+        "symbol": "ATOMUSDT",
+        "tier": "watchlist",
+        "final_score": 76.0,
+        "trend_score": 75.0,
+        "volume_breakout_score": 50.0,
+        "volume_impulse_score": 70.0,
+        "relative_strength_score": 84.0,
+        "derivatives_score": 59.0,
+        "quality_score": 90.0,
+        "return_1h_pct": 8.0,
+        "return_24h_pct": 25.0,
+        "continuation_grade": None,
+        "ignition_grade": "B",
+        "signal_priority": 3,
+        "risk_flags": [],
+        "chase_risk_score": 40.0,
+        "actionability_score": 72.0,
+        "cross_exchange_confirmed": False,
+        "veto_reason_codes": [],
+    }
+    recent_event = {
+        "asset_id": 27,
+        "alert_type": "ignition_detected",
+        "ts": now - timedelta(hours=3, minutes=59),
+        "payload": {"priority": "P3", "current_tier": "watchlist"},
+    }
+
+    suppressed_events = build_alert_event_rows([rank_row], recent_events=[recent_event], now=now, cooldown_seconds=3600)
+    allowed_events = build_alert_event_rows(
+        [rank_row],
+        recent_events=[{**recent_event, "ts": now - timedelta(hours=4)}],
+        now=now,
+        cooldown_seconds=3600,
+    )
+
+    assert suppressed_events == []
+    assert len(allowed_events) == 1
+    assert allowed_events[0]["alert_type"] == "ignition_detected"
+    assert allowed_events[0]["payload"]["priority"] == "P3"
+
+
+def test_build_alert_event_rows_uses_newest_recent_event_for_duplicate_cooldown_keys():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 29,
+        "exchange": "binance",
+        "symbol": "LINKUSDT",
+        "tier": "watchlist",
+        "final_score": 76.0,
+        "trend_score": 75.0,
+        "volume_breakout_score": 50.0,
+        "volume_impulse_score": 70.0,
+        "relative_strength_score": 84.0,
+        "derivatives_score": 59.0,
+        "quality_score": 90.0,
+        "return_1h_pct": 8.0,
+        "return_24h_pct": 25.0,
+        "continuation_grade": None,
+        "ignition_grade": "B",
+        "signal_priority": 3,
+        "risk_flags": [],
+        "chase_risk_score": 40.0,
+        "actionability_score": 72.0,
+        "cross_exchange_confirmed": False,
+        "veto_reason_codes": [],
+    }
+    recent_events = [
+        {
+            "asset_id": 29,
+            "alert_type": "ignition_detected",
+            "ts": now - timedelta(hours=1),
+            "payload": {"priority": "P3", "current_tier": "watchlist"},
+        },
+        {
+            "asset_id": 29,
+            "alert_type": "ignition_detected",
+            "ts": now - timedelta(hours=5),
+            "payload": {"priority": "P3", "current_tier": "watchlist"},
+        },
+    ]
+
+    events = build_alert_event_rows([rank_row], recent_events=recent_events, now=now, cooldown_seconds=3600)
+
+    assert events == []
+
+
 def test_telegram_client_missing_config_returns_error_without_network():
     result = TelegramClient(bot_token="", chat_id="").send_message("hello")
 

@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -567,6 +567,34 @@ def test_process_alerts_converts_payload_to_jsonb_before_insert(monkeypatch):
     assert inserted_count == 1
     assert sent_count == 0
     assert isinstance(inserted[0]["payload"], Jsonb)
+
+
+@pytest.mark.parametrize(
+    ("cooldown_seconds", "expected_lookback_seconds"),
+    [
+        (3600, 14400),
+        (20000, 20000),
+    ],
+)
+def test_process_alerts_loads_recent_events_for_largest_v2_cooldown(
+    monkeypatch,
+    cooldown_seconds,
+    expected_lookback_seconds,
+):
+    captured = {}
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr("altcoin_trend.scheduler.load_rank_rows", lambda engine, rank_scope, limit: [])
+
+    def fake_load_recent_alert_events(engine, since):
+        captured["since"] = since
+        return []
+
+    monkeypatch.setattr("altcoin_trend.scheduler._load_recent_alert_events", fake_load_recent_alert_events)
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", lambda engine, table_name, rows: len(rows))
+
+    process_alerts(object(), now=now, cooldown_seconds=cooldown_seconds)
+
+    assert captured["since"] == now - timedelta(seconds=expected_lookback_seconds)
 
 
 def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():

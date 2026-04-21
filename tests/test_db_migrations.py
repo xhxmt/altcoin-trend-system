@@ -1,3 +1,5 @@
+from importlib import resources
+
 import altcoin_trend.db as db
 from altcoin_trend.models import Instrument
 
@@ -106,6 +108,26 @@ def test_run_all_migrations_executes_packaged_sql_in_sorted_order(monkeypatch):
     db.run_all_migrations(engine)
 
     assert engine.executed == ["core", "raw", "signal"]
+
+
+def test_signal_v2_migration_adds_expected_feature_columns():
+    sql_text = resources.files("altcoin_trend.migrations").joinpath("006_signal_v2_fields.sql").read_text()
+    expected_columns = [
+        "volume_ratio_1h",
+        "volume_impulse_score",
+        "return_24h_rank",
+        "return_7d_rank",
+        "continuation_grade",
+        "ignition_grade",
+        "signal_priority",
+        "risk_flags",
+        "chase_risk_score",
+        "actionability_score",
+        "cross_exchange_confirmed",
+    ]
+
+    for column in expected_columns:
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql_text
 
 
 def test_insert_rows_returns_zero_for_empty_input():

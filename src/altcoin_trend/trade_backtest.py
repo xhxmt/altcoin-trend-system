@@ -239,14 +239,23 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     frame = frame.sort_values(["asset_id", "ts"]).reset_index(drop=True)
     grouped = frame.groupby("asset_id", group_keys=False)
 
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    frame["high"] = pd.to_numeric(frame["high"], errors="coerce")
+    frame["low"] = pd.to_numeric(frame["low"], errors="coerce")
+    frame["quote_volume"] = pd.to_numeric(frame["quote_volume"], errors="coerce")
+
     frame["return_1h_pct"] = grouped["close"].pct_change(1) * 100.0
     frame["return_4h_pct"] = grouped["close"].pct_change(4) * 100.0
     frame["return_24h_pct"] = grouped["close"].pct_change(24) * 100.0
     frame["return_7d_pct"] = grouped["close"].pct_change(24 * 7) * 100.0
     frame["return_30d_pct"] = grouped["close"].pct_change(24 * 30) * 100.0
+    rolling_volume_4h = grouped["quote_volume"].rolling(4, min_periods=4).mean().reset_index(level=0, drop=True)
     rolling_volume = grouped["quote_volume"].rolling(24, min_periods=12).mean().reset_index(level=0, drop=True)
+    frame["volume_ratio_4h"] = frame["quote_volume"] / rolling_volume_4h
     frame["volume_ratio_24h"] = frame["quote_volume"] / rolling_volume
     frame["volume_ratio_1h"] = frame["volume_ratio_24h"]
+    prior_high_20d = grouped["high"].transform(lambda series: series.shift(1).rolling(24 * 20, min_periods=24 * 20).max())
+    frame["breakout_20d"] = (frame["close"] > prior_high_20d).fillna(False)
     frame["future_high_1h"] = grouped["high"].shift(-1)
     frame["future_max_return_1h"] = (frame["future_high_1h"] / frame["close"]) - 1.0
     frame["quality_score"] = 100.0
@@ -255,11 +264,20 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     frame["return_7d_rank"] = frame.groupby(["exchange", "ts"])["return_7d_pct"].rank(ascending=False, method="min")
     return_24h_count = frame.groupby(["exchange", "ts"])["return_24h_pct"].transform("count")
     return_7d_count = frame.groupby(["exchange", "ts"])["return_7d_pct"].transform("count")
-    frame["return_24h_percentile"] = 1.0 - ((frame["return_24h_rank"] - 1.0) / (return_24h_count - 1.0))
-    frame["return_7d_percentile"] = 1.0 - ((frame["return_7d_rank"] - 1.0) / (return_7d_count - 1.0))
-    frame.loc[return_24h_count <= 1, "return_24h_percentile"] = 1.0
-    frame.loc[return_7d_count <= 1, "return_7d_percentile"] = 1.0
+    frame["return_24h_percentile"] = pd.Series(index=frame.index, dtype="float64")
+    frame["return_7d_percentile"] = pd.Series(index=frame.index, dtype="float64")
+    multi_24h = return_24h_count > 1
+    multi_7d = return_7d_count > 1
+    frame.loc[multi_24h, "return_24h_percentile"] = 1.0 - ((frame.loc[multi_24h, "return_24h_rank"] - 1.0) / (return_24h_count[multi_24h] - 1.0))
+    frame.loc[multi_7d, "return_7d_percentile"] = 1.0 - ((frame.loc[multi_7d, "return_7d_rank"] - 1.0) / (return_7d_count[multi_7d] - 1.0))
+    single_24h = (return_24h_count == 1) & frame["return_24h_pct"].notna()
+    single_7d = (return_7d_count == 1) & frame["return_7d_pct"].notna()
+    frame.loc[single_24h, "return_24h_percentile"] = 1.0
+    frame.loc[single_7d, "return_7d_percentile"] = 1.0
+    frame["relative_strength_score"] = frame["return_24h_percentile"].mul(100.0).fillna(50.0)
+    frame["derivatives_score"] = 50.0
     frame["volume_impulse_score"] = frame.apply(compute_volume_impulse_score, axis=1)
+    frame["volume_breakout_score"] = frame["volume_impulse_score"]
     signal_v2 = frame.apply(evaluate_signal_v2, axis=1)
     frame["continuation_grade"] = [result.continuation_grade for result in signal_v2]
     frame["ignition_grade"] = [result.ignition_grade for result in signal_v2]
@@ -429,4 +447,14 @@ def run_signal_v2_backtest(
     window = features[(features["ts"] >= start_utc) & (features["ts"] < end_utc)].copy()
     if window.empty:
         return summarize_signal_v2_groups(pd.DataFrame())
+
+    feature_groups = {asset_id: group.copy() for asset_id, group in features.groupby("asset_id", sort=False)}
+    for idx, row in window.iterrows():
+        asset_features = feature_groups.get(row["asset_id"])
+        if asset_features is None:
+            continue
+        labels = compute_forward_path_labels(row["ts"], row["close"], asset_features[["ts", "high", "low"]])
+        for key, value in labels.items():
+            window.at[idx, key] = value
+
     return summarize_signal_v2_groups(window)

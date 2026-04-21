@@ -1,6 +1,12 @@
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
 import pandas as pd
+
+WORKTREE_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(WORKTREE_SRC) not in sys.path:
+    sys.path.insert(0, str(WORKTREE_SRC))
 
 from altcoin_trend.trade_backtest import (
     compute_forward_path_labels,
@@ -45,6 +51,59 @@ def _hourly_rows(asset_id: int, symbol: str, multiplier: float):
     return rows
 
 
+def _flat_then_jump_rows(
+    asset_id: int,
+    symbol: str,
+    *,
+    total_hours: int,
+    signal_hour: int,
+    signal_close: float,
+    signal_volume: float,
+    signal_high: float,
+    signal_low: float,
+    post_signal_highs: dict[int, float] | None = None,
+    post_signal_lows: dict[int, float] | None = None,
+):
+    rows = []
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    post_signal_highs = post_signal_highs or {}
+    post_signal_lows = post_signal_lows or {}
+    for hour in range(total_hours):
+        close = 100.0
+        high = 101.0
+        low = 99.0
+        quote_volume = 1000.0
+        if hour >= signal_hour:
+            close = signal_close
+            high = signal_close * 1.005
+            low = signal_close * 0.995
+            quote_volume = 1000.0
+        if hour == signal_hour:
+            high = signal_high
+            low = signal_low
+            quote_volume = signal_volume
+        if hour in post_signal_highs:
+            high = post_signal_highs[hour]
+        if hour in post_signal_lows:
+            low = post_signal_lows[hour]
+        rows.append(
+            {
+                "asset_id": asset_id,
+                "exchange": "binance",
+                "symbol": symbol,
+                "ts": start + pd.Timedelta(hours=hour),
+                "open": close,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": quote_volume,
+                "quote_volume": quote_volume,
+                "trade_count": 1,
+            }
+        )
+    return rows
+
+
 def test_evaluate_trade_candidate_bars_scores_forward_1h_high_hits():
     frame = pd.DataFrame(
         _hourly_rows(1, "BTCUSDT", 1.0)
@@ -65,6 +124,33 @@ def test_evaluate_trade_candidate_bars_scores_forward_1h_high_hits():
     assert summary.hit_count >= 1
     assert summary.precision > 0
     assert summary.top_signals[0]["symbol"] == "FASTUSDT"
+
+
+def test_evaluate_trade_candidate_bars_requires_7d_history_for_continuation_candidate():
+    frame = pd.DataFrame(
+        _flat_then_jump_rows(
+            1,
+            "NOVAUSDT",
+            total_hours=26,
+            signal_hour=24,
+            signal_close=120.0,
+            signal_volume=10_000.0,
+            signal_high=126.0,
+            signal_low=119.5,
+        )
+    )
+
+    summary = evaluate_trade_candidate_bars(
+        frame,
+        start=datetime(2026, 1, 2, 0, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 1, 2, 2, 0, tzinfo=timezone.utc),
+        target_return=0.10,
+        limit=5,
+    )
+
+    assert summary.signal_count == 0
+    assert summary.hit_count == 0
+    assert summary.top_signals == []
 
 
 def test_compute_forward_path_labels_detects_target_before_drawdown():
@@ -267,6 +353,50 @@ def test_compute_forward_path_labels_handles_empty_future_rows():
     assert labels["hit_10pct_before_drawdown_8pct"] is False
     assert labels["time_to_hit_5pct_minutes"] is None
     assert labels["time_to_hit_10pct_minutes"] is None
+
+
+def test_run_signal_v2_backtest_uses_real_forward_path_labels_and_ohlcv_defaults(monkeypatch):
+    market_rows = pd.DataFrame(
+        _flat_then_jump_rows(
+            1,
+            "RAVEUSDT",
+            total_hours=49,
+            signal_hour=24,
+            signal_close=180.0,
+            signal_volume=10_000.0,
+            signal_high=198.0,
+            signal_low=179.0,
+            post_signal_highs={
+                25: 198.0,
+                28: 216.0,
+                48: 234.0,
+            },
+            post_signal_lows={
+                25: 179.0,
+                28: 176.0,
+                48: 172.0,
+            },
+        )
+    )
+
+    monkeypatch.setattr("altcoin_trend.trade_backtest._fetch_market_rows", lambda engine, exchange, start, end: market_rows)
+    monkeypatch.setattr("altcoin_trend.trade_backtest.resample_market_1m", lambda group, timeframe: group.copy())
+
+    summary = run_signal_v2_backtest(
+        engine=object(),
+        exchange="binance",
+        start=datetime(2026, 1, 2, 0, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 1, 2, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert summary["ignition_EXTREME"]["signal_count"] == 1
+    assert summary["ignition_EXTREME"]["avg_mfe_1h_pct"] == 10.0
+    assert summary["ignition_EXTREME"]["avg_mfe_4h_pct"] == 20.0
+    assert summary["ignition_EXTREME"]["avg_mfe_24h_pct"] == 30.0
+    assert summary["ignition_EXTREME"]["avg_mae_1h_pct"] == 0.555556
+    assert summary["ignition_EXTREME"]["avg_mae_4h_pct"] == 2.222222
+    assert summary["ignition_EXTREME"]["avg_mae_24h_pct"] == 4.444444
+    assert summary["ignition_EXTREME"]["hit_10pct_before_drawdown_8pct_rate"] == 100.0
 
 
 def test_summarize_signal_v2_groups_reports_by_grade():

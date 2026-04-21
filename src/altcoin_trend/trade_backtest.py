@@ -123,14 +123,14 @@ def compute_forward_path_labels(
         for row in future.itertuples(index=False):
             row_high = float(row.high)
             row_low = float(row.low)
+            if row_low <= drawdown_price:
+                labels[hit_key] = False
+                labels[time_key] = None
+                break
             if row_high >= target_price:
                 hit_time = _coerce_utc_timestamp(row.ts)
                 labels[hit_key] = True
                 labels[time_key] = round((hit_time - signal_ts_utc).total_seconds() / 60.0, 6)
-                break
-            if row_low <= drawdown_price:
-                labels[hit_key] = False
-                labels[time_key] = None
                 break
         else:
             labels[hit_key] = False
@@ -192,8 +192,8 @@ def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, flo
             return
         summary[name] = {
             "signal_count": int(len(group)),
-            "hit_5pct_rate": _rate_from_column_or_threshold(group, ("hit_5pct_before_drawdown_5pct", "hit_5pct_rate"), 5.0),
-            "hit_10pct_rate": _rate_from_column_or_threshold(group, ("hit_10pct_before_drawdown_8pct", "hit_10pct_rate"), 10.0),
+            "hit_5pct_rate": _rate_from_column_or_threshold(group, ("hit_5pct_rate",), 5.0),
+            "hit_10pct_rate": _rate_from_column_or_threshold(group, ("hit_10pct_rate",), 10.0),
             "hit_10pct_before_drawdown_8pct_rate": _rate_from_explicit_column(group, "hit_10pct_before_drawdown_8pct"),
             "avg_mfe_1h_pct": _average(group, "mfe_1h_pct"),
             "avg_mfe_4h_pct": _average(group, "mfe_4h_pct"),

@@ -104,6 +104,22 @@ def test_compute_forward_path_labels_detects_drawdown_before_target():
     assert labels["time_to_hit_10pct_minutes"] is None
 
 
+def test_compute_forward_path_labels_prefers_drawdown_when_same_row_hits_both():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 111.0, "low": 91.0},
+        ]
+    )
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["time_to_hit_10pct_minutes"] is None
+
+
 def test_compute_forward_path_labels_returns_empty_for_invalid_signal_close():
     future = pd.DataFrame(
         [
@@ -224,6 +240,32 @@ def test_summarize_signal_v2_groups_requires_explicit_drawdown_column_for_drawdo
     summary = summarize_signal_v2_groups(signals)
 
     assert summary["continuation_A"]["hit_10pct_rate"] == 50.0
+    assert summary["continuation_A"]["hit_10pct_before_drawdown_8pct_rate"] == 0.0
+
+
+def test_summarize_signal_v2_groups_uses_plain_mfe_rate_for_hit_10pct_rate():
+    signals = pd.DataFrame(
+        [
+            {
+                "continuation_grade": "A",
+                "ignition_grade": None,
+                "mfe_1h_pct": 10.0,
+                "mfe_4h_pct": 12.0,
+                "mfe_24h_pct": 14.0,
+                "mae_1h_pct": 1.0,
+                "mae_4h_pct": 2.0,
+                "mae_24h_pct": 3.0,
+                "hit_10pct_before_drawdown_8pct": False,
+                "time_to_hit_10pct_minutes": None,
+                "cross_exchange_confirmed": True,
+                "chase_risk_score": 20.0,
+            }
+        ]
+    )
+
+    summary = summarize_signal_v2_groups(signals)
+
+    assert summary["continuation_A"]["hit_10pct_rate"] == 100.0
     assert summary["continuation_A"]["hit_10pct_before_drawdown_8pct_rate"] == 0.0
 
 

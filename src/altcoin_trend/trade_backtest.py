@@ -96,8 +96,13 @@ def compute_forward_path_labels(
 
     signal_ts_utc = _coerce_utc_timestamp(signal_ts)
     future = future_rows.copy()
-    future["ts"] = pd.to_datetime(future["ts"], utc=True)
-    future = future.sort_values("ts").reset_index(drop=True)
+    future["ts"] = pd.to_datetime(future["ts"], utc=True, errors="coerce", format="mixed")
+    future["high"] = pd.to_numeric(future["high"], errors="coerce")
+    future["low"] = pd.to_numeric(future["low"], errors="coerce")
+    future = future.dropna(subset=["ts", "high", "low"])
+    future = future[future["ts"] > signal_ts_utc].sort_values("ts").reset_index(drop=True)
+    if future.empty:
+        return labels
 
     windows = {
         "1h": signal_ts_utc + pd.Timedelta(hours=1),
@@ -109,17 +114,17 @@ def compute_forward_path_labels(
         window_rows = future[future["ts"] <= window_end]
         if window_rows.empty:
             continue
-        window_high = float(window_rows["high"].max())
-        window_low = float(window_rows["low"].min())
-        labels[f"mfe_{window_name}_pct"] = round((window_high / close - 1.0) * 100.0, 6)
-        labels[f"mae_{window_name}_pct"] = round((1.0 - window_low / close) * 100.0, 6)
+        window_high = max(float(window_rows["high"].max()), close)
+        window_low = min(float(window_rows["low"].min()), close)
+        labels[f"mfe_{window_name}_pct"] = round(max((window_high / close - 1.0) * 100.0, 0.0), 6)
+        labels[f"mae_{window_name}_pct"] = round(max((1.0 - window_low / close) * 100.0, 0.0), 6)
 
     for target_pct, drawdown_pct, hit_key, time_key in (
         (0.05, 0.05, "hit_5pct_before_drawdown_5pct", "time_to_hit_5pct_minutes"),
         (0.10, 0.08, "hit_10pct_before_drawdown_8pct", "time_to_hit_10pct_minutes"),
     ):
-        target_price = close * (1.0 + target_pct)
-        drawdown_price = close * (1.0 - drawdown_pct)
+        target_price = round(close * (1.0 + target_pct), 12)
+        drawdown_price = round(close * (1.0 - drawdown_pct), 12)
         for row in future.itertuples(index=False):
             row_high = float(row.high)
             row_low = float(row.low)

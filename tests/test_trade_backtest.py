@@ -88,6 +88,117 @@ def test_compute_forward_path_labels_detects_target_before_drawdown():
     assert labels["time_to_hit_10pct_minutes"] == 2.0
 
 
+def test_compute_forward_path_labels_clamps_mae_to_zero_for_rising_only_path():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 101.0, "low": 100.2},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 103.0, "low": 100.5},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["mfe_1h_pct"] == 3.0
+    assert labels["mae_1h_pct"] == 0.0
+    assert labels["mae_4h_pct"] == 0.0
+    assert labels["mae_24h_pct"] == 0.0
+
+
+def test_compute_forward_path_labels_clamps_mfe_to_zero_for_falling_only_path():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 99.5, "low": 98.0},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 99.0, "low": 96.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["mfe_1h_pct"] == 0.0
+    assert labels["mfe_4h_pct"] == 0.0
+    assert labels["mfe_24h_pct"] == 0.0
+    assert labels["mae_1h_pct"] == 4.0
+
+
+def test_compute_forward_path_labels_ignores_rows_at_or_before_signal_timestamp():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2025-12-31T23:59:00Z"), "high": 120.0, "low": 80.0},
+            {"ts": pd.Timestamp("2026-01-01T00:00:00Z"), "high": 121.0, "low": 79.0},
+            {"ts": pd.Timestamp("2026-01-01T00:03:00Z"), "high": 105.0, "low": 99.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["mfe_1h_pct"] == 5.0
+    assert labels["mae_1h_pct"] == 1.0
+    assert labels["hit_5pct_before_drawdown_5pct"] is True
+    assert labels["time_to_hit_5pct_minutes"] == 3.0
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["time_to_hit_10pct_minutes"] is None
+
+
+def test_compute_forward_path_labels_ignores_invalid_rows_but_uses_valid_post_signal_rows():
+    future = pd.DataFrame(
+        [
+            {"ts": None, "high": 999.0, "low": 0.0},
+            {"ts": "not-a-timestamp", "high": "bad", "low": "worse"},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": "110.0", "low": "99.5"},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    for key, value in labels.items():
+        if isinstance(value, float):
+            assert not pd.isna(value), key
+
+    assert labels["mfe_1h_pct"] == 10.0
+    assert labels["mae_1h_pct"] == 0.5
+    assert labels["hit_10pct_before_drawdown_8pct"] is True
+    assert labels["time_to_hit_10pct_minutes"] == 2.0
+
+
+def test_compute_forward_path_labels_excludes_rows_beyond_window_bounds():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:30:00Z"), "high": 102.0, "low": 99.0},
+            {"ts": pd.Timestamp("2026-01-01T05:00:00Z"), "high": 103.0, "low": 98.0},
+            {"ts": pd.Timestamp("2026-01-02T02:00:00Z"), "high": 200.0, "low": 10.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["mfe_1h_pct"] == 2.0
+    assert labels["mae_1h_pct"] == 1.0
+    assert labels["mfe_4h_pct"] == 2.0
+    assert labels["mae_4h_pct"] == 1.0
+    assert labels["mfe_24h_pct"] == 3.0
+    assert labels["mae_24h_pct"] == 2.0
+
+
 def test_compute_forward_path_labels_detects_drawdown_before_target():
     future = pd.DataFrame(
         [

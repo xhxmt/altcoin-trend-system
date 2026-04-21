@@ -137,7 +137,34 @@ final_score =
 
 如果存在 `veto_reason_codes`，基础 tier 直接为 `rejected`。
 
-## 6. 主策略：Continuation
+## 6. Signal v2 Model
+
+Signal v2 把趋势强度、信号等级、风险和可执行性拆开表达，避免再用单一字段同时承担“是不是强势”“是不是早期爆发”“能不能追”的全部含义。
+
+- `final_score`
+  - 趋势雷达强度分数，仍然表示整体行情强弱与横截面排名。
+- `continuation_grade`
+  - 仅表示 continuation 质量，取值为 `A`、`B` 或空。
+- `ignition_grade`
+  - 仅表示 ignition 质量，取值为 `EXTREME`、`A`、`B` 或空。
+- `signal_priority`
+  - 告警紧急度，取值 `0` 到 `3`，数值越高越需要立刻关注。
+- `chase_risk_score`
+  - 0 到 100 的追高风险分数，越高表示越容易晚追。
+- `actionability_score`
+  - 机会排序分数，用来衡量当前信号是否值得优先处理。
+
+`trade_candidate` remains compatibility-only and still means continuation is present. It does not include ignition.
+
+| Grade | Meaning | Use |
+|---|---|---|
+| `continuation_A` | Strong confirmed continuation | Main watch signal |
+| `continuation_B` | Confirmed continuation with weaker confirmation | Secondary watch |
+| `ignition_A` | Higher-quality early breakout | Active early alert |
+| `ignition_B` | Early breakout warning | Observe, lower priority |
+| `ignition_EXTREME` | RAVE-style explosive move | Immediate attention with chase-risk warning |
+
+## 7. 主策略：Continuation
 
 当前主策略规则：
 
@@ -167,7 +194,7 @@ def is_continuation_candidate(row):
 - HIGH、PIEVERSE、ORDI、GUN 这类已经进入强趋势的行情。
 - 更适合作为主观察列表和主要交易决策输入。
 
-## 7. 爆发通道：Ignition
+## 8. 爆发通道：Ignition
 
 当前爆发捕获规则：
 
@@ -204,7 +231,7 @@ def is_ignition_candidate(row):
 - RAVE 这类短期极端爆发行情。
 - EDU、SUPER 这类主策略可能较晚识别的启动行情。
 
-## 8. Tier Override
+## 9. Tier Override
 
 爆发通道不推翻原总分体系，只提供晋级通道：
 
@@ -226,7 +253,7 @@ if (
 - 极端爆发达标后，允许进入 `strong`。
 - 这只影响分层展示和告警，不改变 `final_score` 本身。
 
-## 9. 告警结构
+## 10. 告警结构
 
 当前有两类重要告警逻辑：
 
@@ -257,7 +284,7 @@ def is_explosive_move_early_signal(row):
 explosive_move_early
 ```
 
-## 10. 当前回测精度
+## 11. 当前回测精度
 
 回测窗口：
 
@@ -292,7 +319,7 @@ explosive_move_early
 - `ignition` 覆盖更早，尤其补足 RAVE、EDU、SUPER 这类爆发段。
 - `ignition_only` 是新增通道真正贡献的信号，但噪声也最高。
 
-## 11. 当前使用口径
+## 12. 当前使用口径
 
 建议按以下方式使用信号：
 
@@ -304,7 +331,7 @@ explosive_move_early
 | 只有高分但无 candidate | 排名靠前但未满足交易候选 | monitor，不应等同交易信号 |
 | 有 veto | 风险否决 | 不进入交易候选 |
 
-## 12. 已知问题与下一步优化
+## 13. 已知问题与下一步优化
 
 1. `volume_breakout_score` 当前主要受 `volume_ratio_4h` 影响。
    - 这解释了 RAVE 原始 24h 量能约 2x，但 volume score 只有约 35-40 的现象。
@@ -329,7 +356,7 @@ explosive_move_early
      - `ignition_candidate`
      - `explosive_move_early`
 
-## 13. 当前结论
+## 14. 当前结论
 
 当前系统不是单一交易信号，而是“双通道山寨币趋势雷达”：
 

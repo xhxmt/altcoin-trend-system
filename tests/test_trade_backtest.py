@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from altcoin_trend.trade_backtest import evaluate_trade_candidate_bars
+from altcoin_trend.trade_backtest import (
+    compute_forward_path_labels,
+    evaluate_trade_candidate_bars,
+    summarize_signal_v2_groups,
+)
 
 
 def _hourly_rows(asset_id: int, symbol: str, multiplier: float):
@@ -60,3 +64,155 @@ def test_evaluate_trade_candidate_bars_scores_forward_1h_high_hits():
     assert summary.hit_count >= 1
     assert summary.precision > 0
     assert summary.top_signals[0]["symbol"] == "FASTUSDT"
+
+
+def test_compute_forward_path_labels_detects_target_before_drawdown():
+    signal_close = 100.0
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 104.0, "low": 99.0},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 111.0, "low": 98.0},
+            {"ts": pd.Timestamp("2026-01-01T00:03:00Z"), "high": 112.0, "low": 90.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=signal_close,
+        future_rows=future,
+    )
+
+    assert labels["mfe_1h_pct"] == 12.0
+    assert labels["mae_1h_pct"] == 10.0
+    assert labels["hit_10pct_before_drawdown_8pct"] is True
+    assert labels["time_to_hit_10pct_minutes"] == 2.0
+
+
+def test_compute_forward_path_labels_detects_drawdown_before_target():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 104.0, "low": 91.0},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 112.0, "low": 90.0},
+        ]
+    )
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["time_to_hit_10pct_minutes"] is None
+
+
+def test_compute_forward_path_labels_returns_empty_for_invalid_signal_close():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 111.0, "low": 90.0}
+        ]
+    )
+    for close in (None, float("nan"), pd.NA, 0.0, -1.0):
+        labels = compute_forward_path_labels(
+            signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+            signal_close=close,
+            future_rows=future,
+        )
+        assert labels["mfe_1h_pct"] == 0.0
+        assert labels["mae_1h_pct"] == 0.0
+        assert labels["hit_10pct_before_drawdown_8pct"] is False
+        assert labels["time_to_hit_10pct_minutes"] is None
+
+
+def test_summarize_signal_v2_groups_reports_by_grade():
+    signals = pd.DataFrame(
+        [
+            {
+                "continuation_grade": "A",
+                "ignition_grade": None,
+                "mfe_1h_pct": 12.0,
+                "mfe_4h_pct": 15.0,
+                "mfe_24h_pct": 18.0,
+                "mae_1h_pct": 3.0,
+                "mae_4h_pct": 4.0,
+                "mae_24h_pct": 5.0,
+                "hit_10pct_before_drawdown_8pct": True,
+                "time_to_hit_10pct_minutes": 30.0,
+                "cross_exchange_confirmed": True,
+                "chase_risk_score": 20.0,
+            },
+            {
+                "continuation_grade": None,
+                "ignition_grade": "B",
+                "mfe_1h_pct": 4.0,
+                "mfe_4h_pct": 6.0,
+                "mfe_24h_pct": 7.0,
+                "mae_1h_pct": 9.0,
+                "mae_4h_pct": 10.0,
+                "mae_24h_pct": 11.0,
+                "hit_10pct_before_drawdown_8pct": False,
+                "time_to_hit_10pct_minutes": None,
+                "cross_exchange_confirmed": False,
+                "chase_risk_score": 80.0,
+            },
+        ]
+    )
+
+    summary = summarize_signal_v2_groups(signals)
+
+    assert summary["continuation_A"]["signal_count"] == 1
+    assert summary["continuation_A"]["hit_5pct_rate"] == 100.0
+    assert summary["continuation_A"]["hit_10pct_rate"] == 100.0
+    assert summary["continuation_A"]["hit_10pct_before_drawdown_8pct_rate"] == 100.0
+    assert summary["ignition_B"]["signal_count"] == 1
+    assert summary["ignition_B"]["avg_mae_1h_pct"] == 9.0
+    assert summary["ignition_B"]["avg_mfe_4h_pct"] == 6.0
+    assert summary["ignition_B"]["median_time_to_hit_10pct_minutes"] == 0.0
+
+
+def test_summarize_signal_v2_groups_handles_empty_frame():
+    summary = summarize_signal_v2_groups(pd.DataFrame())
+    assert summary["continuation_A"]["signal_count"] == 0
+    assert summary["ignition_EXTREME"]["avg_mfe_1h_pct"] == 0.0
+    assert summary["single_exchange_triggered"]["signal_count"] == 0
+
+
+def test_summarize_signal_v2_groups_reports_cross_exchange_and_chase_risk_groups():
+    signals = pd.DataFrame(
+        [
+            {
+                "continuation_grade": "A",
+                "ignition_grade": None,
+                "mfe_1h_pct": 12.0,
+                "mfe_4h_pct": 15.0,
+                "mfe_24h_pct": 20.0,
+                "mae_1h_pct": 2.0,
+                "mae_4h_pct": 3.0,
+                "mae_24h_pct": 4.0,
+                "hit_10pct_before_drawdown_8pct": True,
+                "time_to_hit_10pct_minutes": 30.0,
+                "cross_exchange_confirmed": True,
+                "chase_risk_score": 20.0,
+            },
+            {
+                "continuation_grade": None,
+                "ignition_grade": "EXTREME",
+                "mfe_1h_pct": 8.0,
+                "mfe_4h_pct": 9.0,
+                "mfe_24h_pct": 10.0,
+                "mae_1h_pct": 6.0,
+                "mae_4h_pct": 7.0,
+                "mae_24h_pct": 8.0,
+                "hit_10pct_before_drawdown_8pct": False,
+                "time_to_hit_10pct_minutes": None,
+                "cross_exchange_confirmed": False,
+                "chase_risk_score": 80.0,
+            },
+        ]
+    )
+
+    summary = summarize_signal_v2_groups(signals)
+
+    assert summary["cross_exchange_confirmed"]["signal_count"] == 1
+    assert summary["single_exchange_triggered"]["signal_count"] == 1
+    assert summary["high_chase_risk"]["signal_count"] == 1
+    assert summary["low_or_medium_chase_risk"]["signal_count"] == 1
+    assert summary["cross_exchange_confirmed"]["median_time_to_hit_10pct_minutes"] == 30.0

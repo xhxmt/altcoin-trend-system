@@ -22,10 +22,203 @@ class TradeCandidateBacktestSummary:
     top_signals: list[dict[str, Any]]
 
 
+def _empty_signal_v2_group_entry() -> dict[str, float | int]:
+    return {
+        "signal_count": 0,
+        "hit_5pct_rate": 0.0,
+        "hit_10pct_rate": 0.0,
+        "hit_10pct_before_drawdown_8pct_rate": 0.0,
+        "avg_mfe_1h_pct": 0.0,
+        "avg_mfe_4h_pct": 0.0,
+        "avg_mfe_24h_pct": 0.0,
+        "avg_mae_1h_pct": 0.0,
+        "avg_mae_4h_pct": 0.0,
+        "avg_mae_24h_pct": 0.0,
+        "median_time_to_hit_10pct_minutes": 0.0,
+    }
+
+
+def _empty_signal_v2_group_summary() -> dict[str, dict[str, float | int]]:
+    return {
+        "continuation_A": _empty_signal_v2_group_entry(),
+        "continuation_B": _empty_signal_v2_group_entry(),
+        "ignition_A": _empty_signal_v2_group_entry(),
+        "ignition_B": _empty_signal_v2_group_entry(),
+        "ignition_EXTREME": _empty_signal_v2_group_entry(),
+        "cross_exchange_confirmed": _empty_signal_v2_group_entry(),
+        "single_exchange_triggered": _empty_signal_v2_group_entry(),
+        "high_chase_risk": _empty_signal_v2_group_entry(),
+        "low_or_medium_chase_risk": _empty_signal_v2_group_entry(),
+    }
+
+
 def _coerce_utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _coerce_utc_timestamp(value: pd.Timestamp | datetime | str) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None or ts.utcoffset() is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _empty_forward_path_labels() -> dict[str, Any]:
+    return {
+        "mfe_1h_pct": 0.0,
+        "mfe_4h_pct": 0.0,
+        "mfe_24h_pct": 0.0,
+        "mae_1h_pct": 0.0,
+        "mae_4h_pct": 0.0,
+        "mae_24h_pct": 0.0,
+        "hit_5pct_before_drawdown_5pct": False,
+        "hit_10pct_before_drawdown_8pct": False,
+        "time_to_hit_5pct_minutes": None,
+        "time_to_hit_10pct_minutes": None,
+    }
+
+
+def compute_forward_path_labels(
+    signal_ts: pd.Timestamp | datetime,
+    signal_close: float,
+    future_rows: pd.DataFrame,
+) -> dict[str, Any]:
+    try:
+        close = float(signal_close)
+    except (TypeError, ValueError):
+        return _empty_forward_path_labels()
+    if pd.isna(close) or close <= 0 or future_rows.empty:
+        return _empty_forward_path_labels()
+
+    labels = _empty_forward_path_labels()
+
+    signal_ts_utc = _coerce_utc_timestamp(signal_ts)
+    future = future_rows.copy()
+    future["ts"] = pd.to_datetime(future["ts"], utc=True)
+    future = future.sort_values("ts").reset_index(drop=True)
+
+    windows = {
+        "1h": signal_ts_utc + pd.Timedelta(hours=1),
+        "4h": signal_ts_utc + pd.Timedelta(hours=4),
+        "24h": signal_ts_utc + pd.Timedelta(hours=24),
+    }
+
+    for window_name, window_end in windows.items():
+        window_rows = future[future["ts"] <= window_end]
+        if window_rows.empty:
+            continue
+        window_high = float(window_rows["high"].max())
+        window_low = float(window_rows["low"].min())
+        labels[f"mfe_{window_name}_pct"] = round((window_high / close - 1.0) * 100.0, 6)
+        labels[f"mae_{window_name}_pct"] = round((1.0 - window_low / close) * 100.0, 6)
+
+    for target_pct, drawdown_pct, hit_key, time_key in (
+        (0.05, 0.05, "hit_5pct_before_drawdown_5pct", "time_to_hit_5pct_minutes"),
+        (0.10, 0.08, "hit_10pct_before_drawdown_8pct", "time_to_hit_10pct_minutes"),
+    ):
+        target_price = close * (1.0 + target_pct)
+        drawdown_price = close * (1.0 - drawdown_pct)
+        for row in future.itertuples(index=False):
+            row_high = float(row.high)
+            row_low = float(row.low)
+            if row_high >= target_price:
+                hit_time = _coerce_utc_timestamp(row.ts)
+                labels[hit_key] = True
+                labels[time_key] = round((hit_time - signal_ts_utc).total_seconds() / 60.0, 6)
+                break
+            if row_low <= drawdown_price:
+                labels[hit_key] = False
+                labels[time_key] = None
+                break
+        else:
+            labels[hit_key] = False
+            labels[time_key] = None
+
+    return labels
+
+
+def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, float | int]]:
+    summary = _empty_signal_v2_group_summary()
+    if signals.empty:
+        return summary
+
+    def _group_frame(mask: pd.Series) -> pd.DataFrame:
+        return signals[mask.fillna(False)]
+
+    def _as_numeric(group: pd.DataFrame, column: str) -> pd.Series:
+        if column not in group.columns:
+            return pd.Series(dtype="float64")
+        return pd.to_numeric(group[column], errors="coerce")
+
+    def _average(group: pd.DataFrame, column: str) -> float:
+        series = _as_numeric(group, column).dropna()
+        if series.empty:
+            return 0.0
+        return round(float(series.mean()), 6)
+
+    def _rate_from_column_or_threshold(group: pd.DataFrame, column_candidates: tuple[str, ...], threshold: float) -> float:
+        for column in column_candidates:
+            if column in group.columns:
+                series = _as_numeric(group, column).fillna(0.0)
+                if series.empty:
+                    return 0.0
+                return round(float((series > 0).mean() * 100.0), 6)
+        series = _as_numeric(group, "mfe_1h_pct").fillna(0.0)
+        if series.empty:
+            return 0.0
+        return round(float((series >= threshold).mean() * 100.0), 6)
+
+    def _median_minutes(group: pd.DataFrame, column: str) -> float:
+        series = _as_numeric(group, column).dropna()
+        if series.empty:
+            return 0.0
+        median = float(series.median())
+        return 0.0 if pd.isna(median) else round(median, 6)
+
+    def _populate_group(name: str, mask: pd.Series) -> None:
+        group = _group_frame(mask)
+        if group.empty:
+            summary[name] = _empty_signal_v2_group_entry()
+            return
+        summary[name] = {
+            "signal_count": int(len(group)),
+            "hit_5pct_rate": _rate_from_column_or_threshold(group, ("hit_5pct_before_drawdown_5pct", "hit_5pct_rate"), 5.0),
+            "hit_10pct_rate": _rate_from_column_or_threshold(group, ("hit_10pct_before_drawdown_8pct", "hit_10pct_rate"), 10.0),
+            "hit_10pct_before_drawdown_8pct_rate": _rate_from_column_or_threshold(
+                group,
+                ("hit_10pct_before_drawdown_8pct",),
+                10.0,
+            ),
+            "avg_mfe_1h_pct": _average(group, "mfe_1h_pct"),
+            "avg_mfe_4h_pct": _average(group, "mfe_4h_pct"),
+            "avg_mfe_24h_pct": _average(group, "mfe_24h_pct"),
+            "avg_mae_1h_pct": _average(group, "mae_1h_pct"),
+            "avg_mae_4h_pct": _average(group, "mae_4h_pct"),
+            "avg_mae_24h_pct": _average(group, "mae_24h_pct"),
+            "median_time_to_hit_10pct_minutes": _median_minutes(group, "time_to_hit_10pct_minutes"),
+        }
+
+    grade_masks = {
+        "continuation_A": signals["continuation_grade"].fillna("").astype(str).eq("A") if "continuation_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "continuation_B": signals["continuation_grade"].fillna("").astype(str).eq("B") if "continuation_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "ignition_A": signals["ignition_grade"].fillna("").astype(str).eq("A") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "ignition_B": signals["ignition_grade"].fillna("").astype(str).eq("B") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "ignition_EXTREME": signals["ignition_grade"].fillna("").astype(str).eq("EXTREME") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+    }
+    for name, mask in grade_masks.items():
+        _populate_group(name, mask)
+
+    if "cross_exchange_confirmed" in signals.columns:
+        confirmed = signals["cross_exchange_confirmed"].fillna(False).eq(True)
+        _populate_group("cross_exchange_confirmed", confirmed)
+        _populate_group("single_exchange_triggered", ~confirmed)
+    if "chase_risk_score" in signals.columns:
+        chase_risk = pd.to_numeric(signals["chase_risk_score"], errors="coerce")
+        _populate_group("high_chase_risk", chase_risk >= 60)
+        _populate_group("low_or_medium_chase_risk", chase_risk < 60)
+    return summary
 
 
 def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:

@@ -40,6 +40,15 @@ def tier_for_score(final_score: float) -> str:
     return "rejected"
 
 
+_TIER_ORDER = {"rejected": 0, "monitor": 1, "watchlist": 2, "strong": 3}
+
+
+def max_tier(current_tier: str, minimum_tier: str) -> str:
+    if _TIER_ORDER.get(minimum_tier, -1) > _TIER_ORDER.get(current_tier, -1):
+        return minimum_tier
+    return current_tier
+
+
 def compute_final_score(score_input: ScoreInput) -> ScoreResult:
     trend = clamp_trend_score(score_input.trend_score)
     volume = clamp_volume_score(score_input.volume_breakout_score)

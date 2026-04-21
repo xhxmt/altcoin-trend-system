@@ -19,6 +19,21 @@ class TradeCandidateRule:
 ITER25_RULE = TradeCandidateRule()
 
 
+@dataclass(frozen=True)
+class IgnitionCandidateRule:
+    min_return_1h_pct: float = 8.0
+    min_return_24h_pct: float = 25.0
+    min_return_24h_percentile: float = 0.92
+    min_relative_strength_score: float = 85.0
+    min_quality_score: float = 80.0
+    min_volume_ratio_24h: float = 1.8
+    min_volume_breakout_score: float = 35.0
+    min_derivatives_score: float = 30.0
+
+
+IGNITION_RULE = IgnitionCandidateRule()
+
+
 def _get(row: Mapping[str, Any] | Any, key: str, default: Any = None) -> Any:
     if isinstance(row, Mapping):
         return row.get(key, default)
@@ -47,7 +62,7 @@ def _normalize_items(value: Any) -> tuple[str, ...]:
     return (normalized,) if normalized else ()
 
 
-def is_trade_candidate(row: Mapping[str, Any] | Any, rule: TradeCandidateRule = ITER25_RULE) -> bool:
+def is_continuation_candidate(row: Mapping[str, Any] | Any, rule: TradeCandidateRule = ITER25_RULE) -> bool:
     values = {
         "return_1h_pct": _float_value(row, "return_1h_pct"),
         "return_4h_pct": _float_value(row, "return_4h_pct"),
@@ -70,3 +85,37 @@ def is_trade_candidate(row: Mapping[str, Any] | Any, rule: TradeCandidateRule = 
         and values["quality_score"] >= rule.min_quality_score
         and not veto_reason_codes
     )
+
+
+def is_ignition_candidate(row: Mapping[str, Any] | Any, rule: IgnitionCandidateRule = IGNITION_RULE) -> bool:
+    values = {
+        "return_1h_pct": _float_value(row, "return_1h_pct"),
+        "return_24h_pct": _float_value(row, "return_24h_pct"),
+        "return_24h_percentile": _float_value(row, "return_24h_percentile"),
+        "relative_strength_score": _float_value(row, "relative_strength_score"),
+        "quality_score": _float_value(row, "quality_score"),
+        "volume_ratio_24h": _float_value(row, "volume_ratio_24h"),
+        "volume_breakout_score": _float_value(row, "volume_breakout_score"),
+        "derivatives_score": _float_value(row, "derivatives_score"),
+    }
+    if any(value is None for value in values.values()):
+        return False
+    veto_reason_codes = _normalize_items(_get(row, "veto_reason_codes", None))
+    volume_confirmed = (
+        values["volume_ratio_24h"] >= rule.min_volume_ratio_24h
+        or values["volume_breakout_score"] >= rule.min_volume_breakout_score
+    )
+    return (
+        values["return_1h_pct"] >= rule.min_return_1h_pct
+        and values["return_24h_pct"] >= rule.min_return_24h_pct
+        and values["return_24h_percentile"] >= rule.min_return_24h_percentile
+        and values["relative_strength_score"] >= rule.min_relative_strength_score
+        and values["quality_score"] >= rule.min_quality_score
+        and volume_confirmed
+        and values["derivatives_score"] >= rule.min_derivatives_score
+        and not veto_reason_codes
+    )
+
+
+def is_trade_candidate(row: Mapping[str, Any] | Any, rule: TradeCandidateRule = ITER25_RULE) -> bool:
+    return is_continuation_candidate(row, rule=rule)

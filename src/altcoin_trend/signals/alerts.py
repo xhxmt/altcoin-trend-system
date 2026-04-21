@@ -58,6 +58,26 @@ def is_high_value_signal(row: Mapping[str, Any] | Any) -> bool:
     )
 
 
+def is_explosive_move_early_signal(row: Mapping[str, Any] | Any) -> bool:
+    try:
+        return_1h_pct = float(_get(row, "return_1h_pct", 0.0))
+        return_4h_pct = float(_get(row, "return_4h_pct", 0.0))
+        return_24h_percentile = float(_get(row, "return_24h_percentile", 0.0))
+        relative_strength_score = float(_get(row, "relative_strength_score", 0.0))
+        quality_score = float(_get(row, "quality_score", 0.0))
+    except (TypeError, ValueError):
+        return False
+
+    veto_reason_codes = _normalize_items(_get(row, "veto_reason_codes", None))
+    return (
+        (return_1h_pct >= 12.0 or return_4h_pct >= 20.0)
+        and return_24h_percentile >= 0.97
+        and relative_strength_score >= 90.0
+        and quality_score >= 80.0
+        and not veto_reason_codes
+    )
+
+
 @dataclass
 class AlertCooldown:
     cooldown_seconds: int
@@ -133,6 +153,30 @@ def build_strong_alert_message(row: Mapping[str, Any] | Any) -> str:
     return "\n".join(lines)
 
 
+def build_explosive_move_early_alert_message(row: Mapping[str, Any] | Any) -> str:
+    exchange = str(_get(row, "exchange", "unknown"))
+    symbol = str(_get(row, "symbol", "unknown"))
+    display_exchange = exchange.title()
+
+    def _display_value(key: str) -> Any:
+        value = _get(row, key, None)
+        return "n/a" if value is None else value
+
+    lines = [
+        f"[EXPLOSIVE_MOVE_EARLY] {symbol} {display_exchange}",
+        f"Final score: {_display_value('final_score')}",
+        f"Tier: {_display_value('tier')}",
+        "Move context:",
+        f"Return 1h: {_display_value('return_1h_pct')}",
+        f"Return 4h: {_display_value('return_4h_pct')}",
+        f"Return 24h percentile: {_display_value('return_24h_percentile')}",
+        f"Relative strength: {_display_value('relative_strength_score')}",
+        f"Volume breakout: {_display_value('volume_breakout_score')}",
+        f"Quality: {_display_value('quality_score')}",
+    ]
+    return "\n".join(lines)
+
+
 def _recent_event_key(event: Mapping[str, Any]) -> tuple[int, str]:
     return (int(event["asset_id"]), str(event["alert_type"]))
 
@@ -173,6 +217,27 @@ def build_alert_event_rows(
         asset_id = int(_get(row, "asset_id"))
         current_tier = str(_get(row, "tier", "rejected"))
         previous_tier = _previous_tier_for_asset(asset_id, recent_events)
+        if is_explosive_move_early_signal(row):
+            recent_event = events_by_key.get((asset_id, "explosive_move_early"))
+            if recent_event is None or not _event_recent_enough(recent_event, current_time, cooldown_seconds):
+                alert_rows.append(
+                    {
+                        "ts": current_time,
+                        "asset_id": asset_id,
+                        "symbol": str(_get(row, "symbol")),
+                        "alert_type": "explosive_move_early",
+                        "final_score": float(_get(row, "final_score", 0.0)),
+                        "message": build_explosive_move_early_alert_message(row),
+                        "payload": {
+                            "exchange": _get(row, "exchange", "unknown"),
+                            "current_tier": current_tier,
+                            "previous_tier": previous_tier,
+                            "rank": _get(row, "rank", None),
+                        },
+                        "delivery_status": "pending",
+                        "delivery_error": None,
+                    }
+                )
         positive_breakout = current_tier == "strong" and previous_tier not in {"strong", "watchlist"}
         decision = evaluate_transition(
             previous_tier=previous_tier,

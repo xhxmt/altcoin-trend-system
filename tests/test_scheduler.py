@@ -276,6 +276,58 @@ def test_build_snapshot_rows_marks_research_trade_candidate():
     assert next(row for row in rank_rows if row["symbol"] == "FASTUSDT")["payload"]["trade_candidate"] is True
 
 
+def test_build_snapshot_rows_marks_ignition_candidate_and_overrides_tier():
+    snapshot_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    rows = []
+    for hour in range(24 * 31):
+        ts = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(hours=hour)
+        btc_close = 100.0 + hour * 0.01
+        eth_close = 100.0 + hour * 0.01
+        ignition_close = 100.0 + hour * 0.01
+        if hour == 24 * 31 - 25:
+            ignition_close = 100.0
+        elif hour > 24 * 31 - 25:
+            ignition_close = 125.0
+        if hour == 24 * 31 - 1:
+            ignition_close = 170.0
+        for asset_id, symbol, close, quote_volume in (
+            (1, "BTCUSDT", btc_close, 1000.0),
+            (2, "ETHUSDT", eth_close, 1000.0),
+            (3, "RAVEUSDT", ignition_close, 1000.0),
+        ):
+            if symbol == "RAVEUSDT" and hour == 24 * 31 - 1:
+                quote_volume = 2000.0
+            rows.append(
+                {
+                    "asset_id": asset_id,
+                    "exchange": "binance",
+                    "symbol": symbol,
+                    "base_asset": symbol.removesuffix("USDT"),
+                    "ts": ts,
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "volume": quote_volume,
+                    "quote_volume": quote_volume,
+                }
+            )
+
+    feature_rows, rank_rows = build_snapshot_rows(pd.DataFrame(rows), snapshot_ts)
+    row = next(row for row in feature_rows if row["symbol"] == "RAVEUSDT")
+    rank_row = next(row for row in rank_rows if row["symbol"] == "RAVEUSDT" and row["rank_scope"] == "all")
+
+    assert row["return_1h_pct"] >= 15.0
+    assert row["return_24h_pct"] >= 60.0
+    assert row["ignition_candidate"] is True
+    assert row["continuation_candidate"] is False
+    assert row["trade_candidate"] is False
+    assert row["tier"] == "strong"
+    assert rank_row["tier"] == "strong"
+    assert rank_row["payload"]["ignition_candidate"] is True
+    assert rank_row["payload"]["continuation_candidate"] is False
+
+
 def test_write_run_once_snapshots_preserves_rank_payload(monkeypatch):
     market_rows = pd.DataFrame(
         [
@@ -310,7 +362,50 @@ def test_write_run_once_snapshots_preserves_rank_payload(monkeypatch):
 
     rank_rows = next(rows for table_name, rows in inserted if table_name == "alt_signal.rank_snapshot")
     assert isinstance(rank_rows[0]["payload"], Jsonb)
-    assert rank_rows[0]["payload"].obj == {"trade_candidate": False}
+    assert rank_rows[0]["payload"].obj == {
+        "trade_candidate": False,
+        "continuation_candidate": False,
+        "ignition_candidate": False,
+    }
+
+
+def test_process_alerts_converts_payload_to_jsonb_before_insert(monkeypatch):
+    inserted = []
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler.load_rank_rows",
+        lambda engine, rank_scope, limit: [
+            {
+                "asset_id": 21,
+                "exchange": "binance",
+                "symbol": "RAVEUSDT",
+                "tier": "monitor",
+                "final_score": 63.0,
+                "trend_score": 67.0,
+                "volume_breakout_score": 35.0,
+                "relative_strength_score": 92.0,
+                "derivatives_score": 31.0,
+                "quality_score": 100.0,
+                "return_1h_pct": 12.5,
+                "return_4h_pct": 10.0,
+                "return_24h_percentile": 0.98,
+                "veto_reason_codes": [],
+            }
+        ],
+    )
+    monkeypatch.setattr("altcoin_trend.scheduler._load_recent_alert_events", lambda engine, since: [])
+
+    def fake_insert_rows(engine, table_name, rows):
+        inserted.extend(rows)
+        return len(rows)
+
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", fake_insert_rows)
+
+    inserted_count, sent_count = process_alerts(object(), now=now, cooldown_seconds=3600)
+
+    assert inserted_count == 1
+    assert sent_count == 0
+    assert isinstance(inserted[0]["payload"], Jsonb)
 
 
 def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():

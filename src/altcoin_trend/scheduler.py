@@ -14,11 +14,11 @@ from altcoin_trend.features.derivatives import compute_derivatives_features
 from altcoin_trend.features.indicators import add_ema, adx, atr
 from altcoin_trend.features.relative_strength import RelativeStrengthFeature, build_relative_strength_features
 from altcoin_trend.features.resample import resample_market_1m
-from altcoin_trend.features.scoring import ScoreInput, compute_final_score
+from altcoin_trend.features.scoring import ScoreInput, compute_final_score, max_tier
 from altcoin_trend.signals.alerts import build_alert_event_rows
 from altcoin_trend.signals.ranking import rank_scores
 from altcoin_trend.signals.telegram import TelegramClient
-from altcoin_trend.signals.trade_candidate import is_trade_candidate
+from altcoin_trend.signals.trade_candidate import is_continuation_candidate, is_ignition_candidate, is_trade_candidate
 
 
 @dataclass(frozen=True)
@@ -269,6 +269,8 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
             derivatives.derivatives_score,
         )
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
+        continuation_candidate = False
+        ignition_candidate = False
         feature_rows.append(
             {
                 "ts": snapshot_ts,
@@ -295,12 +297,20 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "final_score": score_result.final_score,
                 "tier": score_result.tier,
                 "primary_reason": score_result.primary_reason,
+                "continuation_candidate": continuation_candidate,
+                "ignition_candidate": ignition_candidate,
             }
         )
 
     _assign_return_percentiles(feature_rows)
     for row in feature_rows:
+        row["continuation_candidate"] = is_continuation_candidate(row)
+        row["ignition_candidate"] = is_ignition_candidate(row)
         row["trade_candidate"] = is_trade_candidate(row)
+        if row["ignition_candidate"]:
+            row["tier"] = max_tier(row["tier"], "watchlist")
+            if float(row.get("return_1h_pct") or 0.0) >= 15.0 and float(row.get("return_24h_pct") or 0.0) >= 60.0:
+                row["tier"] = max_tier(row["tier"], "strong")
 
     rank_rows: list[dict[str, Any]] = []
     for scope, rows in (("all", feature_rows),):
@@ -323,7 +333,11 @@ def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[st
             "final_score": row["final_score"],
             "tier": row["tier"],
             "primary_reason": row["primary_reason"] or None,
-            "payload": {"trade_candidate": bool(row.get("trade_candidate", False))},
+            "payload": {
+                "trade_candidate": bool(row.get("trade_candidate", False)),
+                "continuation_candidate": bool(row.get("continuation_candidate", False)),
+                "ignition_candidate": bool(row.get("ignition_candidate", False)),
+            },
         }
         for row in ranked
     ]
@@ -423,6 +437,8 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
             fs.return_24h_percentile,
             fs.return_7d_percentile,
             fs.trade_candidate,
+            fs.continuation_candidate,
+            fs.ignition_candidate,
             fs.oi_delta_1h,
             fs.oi_delta_4h,
             fs.funding_zscore,
@@ -460,6 +476,8 @@ def load_trade_candidate_rows(engine: Engine, limit: int = 30) -> list[dict[str,
             fs.close,
             fs.final_score,
             fs.trade_candidate,
+            fs.continuation_candidate,
+            fs.ignition_candidate,
             fs.return_1h_pct,
             fs.return_4h_pct,
             fs.return_24h_pct,
@@ -510,6 +528,8 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
             fs.return_24h_percentile,
             fs.return_7d_percentile,
             fs.trade_candidate,
+            fs.continuation_candidate,
+            fs.ignition_candidate,
             fs.trend_score,
             fs.volume_breakout_score,
             fs.relative_strength_score,
@@ -596,7 +616,14 @@ def process_alerts(
         else:
             row["delivery_status"] = "failed"
             row["delivery_error"] = result.error
-    inserted_count = insert_rows(engine, "alt_signal.alert_events", alert_rows)
+    alert_insert_rows = [
+        {
+            **row,
+            "payload": Jsonb(row["payload"]),
+        }
+        for row in alert_rows
+    ]
+    inserted_count = insert_rows(engine, "alt_signal.alert_events", alert_insert_rows)
     return inserted_count, sent_count
 
 

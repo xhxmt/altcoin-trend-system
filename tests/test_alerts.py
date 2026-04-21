@@ -341,6 +341,44 @@ def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_dupli
     assert duplicate_events == []
 
 
+def test_build_alert_event_rows_creates_explosive_move_early_alert_independent_of_tier():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_rows = [
+        {
+            "asset_id": 21,
+            "exchange": "binance",
+            "symbol": "RAVEUSDT",
+            "tier": "monitor",
+            "final_score": 63.0,
+            "trend_score": 67.0,
+            "volume_breakout_score": 35.0,
+            "relative_strength_score": 92.0,
+            "derivatives_score": 31.0,
+            "quality_score": 100.0,
+            "return_1h_pct": 12.5,
+            "return_4h_pct": 10.0,
+            "return_24h_percentile": 0.98,
+            "veto_reason_codes": [],
+        }
+    ]
+
+    events = build_alert_event_rows(rank_rows, recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "explosive_move_early"
+    assert "[EXPLOSIVE_MOVE_EARLY] RAVEUSDT Binance" in events[0]["message"]
+    assert events[0]["payload"]["current_tier"] == "monitor"
+
+    duplicate_events = build_alert_event_rows(
+        rank_rows,
+        recent_events=[events[0]],
+        now=now + timedelta(minutes=10),
+        cooldown_seconds=3600,
+    )
+
+    assert duplicate_events == []
+
+
 def test_telegram_client_missing_config_returns_error_without_network():
     result = TelegramClient(bot_token="", chat_id="").send_message("hello")
 

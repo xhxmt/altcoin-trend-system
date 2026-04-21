@@ -171,6 +171,7 @@ def test_cli_rank_can_aggregate_symbols(monkeypatch):
     captured = {}
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(default_exchanges="binance,bybit"))
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+
     def fake_load_rank_rows(engine, rank_scope, limit):
         captured["limit"] = limit
         return [
@@ -308,17 +309,29 @@ def test_cli_health_prints_health_report(monkeypatch):
 
 
 def test_cli_alerts_processes_pending_alerts(monkeypatch):
+    captured = {}
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(alert_cooldown_seconds=3600))
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
-    monkeypatch.setattr(
-        "altcoin_trend.cli.process_alerts",
-        lambda engine, now, cooldown_seconds, telegram_client: (2, 0),
-    )
+
+    def fake_process_alerts(engine, now, cooldown_seconds, telegram_client, lookback_seconds):
+        captured["cooldown_seconds"] = cooldown_seconds
+        captured["lookback_seconds"] = lookback_seconds
+        return 2, 0
+
+    monkeypatch.setattr("altcoin_trend.cli.process_alerts", fake_process_alerts)
 
     result = CliRunner().invoke(app, ["alerts", "--since", "1h"])
 
     assert result.exit_code == 0
+    assert captured == {"cooldown_seconds": 3600, "lookback_seconds": 3600}
     assert "Alerts processed inserted=2 sent=0 since=1h" in result.output
+
+
+def test_cli_alerts_rejects_invalid_since_value():
+    result = CliRunner().invoke(app, ["alerts", "--since", "yesterday"])
+
+    assert result.exit_code != 0
+    assert "--since must use formats like 30m, 6h, or 2d" in result.output
 
 
 def test_cli_bootstrap_derivatives_uses_loaded_settings(monkeypatch):
@@ -363,6 +376,7 @@ def test_cli_backtest_prints_summary(monkeypatch):
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
     captured = {}
+
     def fake_run_signal_backtest(engine, start, end, min_score, horizons, high_value_only, limit):
         captured["min_score"] = min_score
         return type(

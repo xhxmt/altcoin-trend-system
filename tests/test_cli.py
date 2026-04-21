@@ -80,6 +80,31 @@ def test_cli_bootstrap_reports_full_market_selection_mode(monkeypatch):
     assert "Bootstrap selection mode=full-market allowlist=0 blocklist=2" in result.output
 
 
+def test_evaluate_signals_v2_command_prints_group_summary(monkeypatch):
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.run_signal_v2_backtest",
+        lambda engine, exchange, start, end: {
+            "continuation_A": {
+                "signal_count": 2,
+                "hit_10pct_before_drawdown_8pct_rate": 50.0,
+                "avg_mfe_1h_pct": 12.5,
+                "avg_mae_1h_pct": 1.25,
+            }
+        },
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["evaluate-signals-v2", "--from", "2026-01-01", "--to", "2026-01-02", "--exchange", "binance"],
+    )
+
+    assert result.exit_code == 0
+    assert "Signal v2 backtest exchange=binance from=2026-01-01T00:00:00+00:00 to=2026-01-02T00:00:00+00:00" in result.output
+    assert "continuation_A signals=2 hit10_before_dd8=50.00%" in result.output
+
+
 def test_cli_explain_uses_requested_exchange_and_symbol(monkeypatch):
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())

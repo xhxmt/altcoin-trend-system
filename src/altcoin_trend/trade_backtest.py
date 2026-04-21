@@ -9,6 +9,7 @@ from sqlalchemy import Engine, text
 
 from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.signals.trade_candidate import is_trade_candidate
+from altcoin_trend.signals.v2 import compute_volume_impulse_score, evaluate_signal_v2
 
 
 @dataclass(frozen=True)
@@ -245,12 +246,38 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     frame["return_30d_pct"] = grouped["close"].pct_change(24 * 30) * 100.0
     rolling_volume = grouped["quote_volume"].rolling(24, min_periods=12).mean().reset_index(level=0, drop=True)
     frame["volume_ratio_24h"] = frame["quote_volume"] / rolling_volume
+    frame["volume_ratio_1h"] = frame["volume_ratio_24h"]
     frame["future_high_1h"] = grouped["high"].shift(-1)
     frame["future_max_return_1h"] = (frame["future_high_1h"] / frame["close"]) - 1.0
     frame["quality_score"] = 100.0
     frame["veto_reason_codes"] = [[] for _ in range(len(frame))]
-    frame["return_24h_percentile"] = frame.groupby(["exchange", "ts"])["return_24h_pct"].rank(pct=True)
-    frame["return_7d_percentile"] = frame.groupby(["exchange", "ts"])["return_7d_pct"].rank(pct=True)
+    frame["return_24h_rank"] = frame.groupby(["exchange", "ts"])["return_24h_pct"].rank(ascending=False, method="min")
+    frame["return_7d_rank"] = frame.groupby(["exchange", "ts"])["return_7d_pct"].rank(ascending=False, method="min")
+    return_24h_count = frame.groupby(["exchange", "ts"])["return_24h_pct"].transform("count")
+    return_7d_count = frame.groupby(["exchange", "ts"])["return_7d_pct"].transform("count")
+    frame["return_24h_percentile"] = 1.0 - ((frame["return_24h_rank"] - 1.0) / (return_24h_count - 1.0))
+    frame["return_7d_percentile"] = 1.0 - ((frame["return_7d_rank"] - 1.0) / (return_7d_count - 1.0))
+    frame.loc[return_24h_count <= 1, "return_24h_percentile"] = 1.0
+    frame.loc[return_7d_count <= 1, "return_7d_percentile"] = 1.0
+    frame["volume_impulse_score"] = frame.apply(compute_volume_impulse_score, axis=1)
+    signal_v2 = frame.apply(evaluate_signal_v2, axis=1)
+    frame["continuation_grade"] = [result.continuation_grade for result in signal_v2]
+    frame["ignition_grade"] = [result.ignition_grade for result in signal_v2]
+    frame["signal_priority"] = [result.signal_priority for result in signal_v2]
+    frame["chase_risk_score"] = [result.chase_risk_score for result in signal_v2]
+    frame["actionability_score"] = [result.actionability_score for result in signal_v2]
+    frame["risk_flags"] = [result.risk_flags for result in signal_v2]
+    frame["cross_exchange_confirmed"] = False
+    frame["mfe_1h_pct"] = frame["future_max_return_1h"].fillna(0.0) * 100.0
+    frame["mfe_4h_pct"] = frame["mfe_1h_pct"]
+    frame["mfe_24h_pct"] = frame["mfe_1h_pct"]
+    frame["mae_1h_pct"] = 0.0
+    frame["mae_4h_pct"] = 0.0
+    frame["mae_24h_pct"] = 0.0
+    frame["hit_5pct_before_drawdown_5pct"] = frame["future_max_return_1h"] >= 0.05
+    frame["hit_10pct_before_drawdown_8pct"] = frame["future_max_return_1h"] >= 0.10
+    frame["time_to_hit_5pct_minutes"] = None
+    frame["time_to_hit_10pct_minutes"] = None
     frame["trade_candidate"] = [is_trade_candidate(row) for row in frame.to_dict("records")]
     return frame
 
@@ -365,3 +392,41 @@ def run_trade_candidate_backtest(
         target_return=target_return,
         limit=limit,
     )
+
+
+def run_signal_v2_backtest(
+    engine: Engine,
+    exchange: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, dict[str, float | int]]:
+    start_utc = _coerce_utc_datetime(start)
+    end_utc = _coerce_utc_datetime(end)
+    if start_utc >= end_utc:
+        raise ValueError("start must be earlier than end")
+
+    market_start = start_utc - timedelta(days=31)
+    market_end = end_utc + timedelta(hours=25)
+    market_rows = _fetch_market_rows(engine, exchange=exchange, start=market_start, end=market_end)
+    if market_rows.empty:
+        return summarize_signal_v2_groups(pd.DataFrame())
+
+    bars: list[pd.DataFrame] = []
+    for _, group in market_rows.groupby("asset_id"):
+        resampled = resample_market_1m(group, "1h")
+        if resampled.empty:
+            continue
+        latest = group.iloc[-1]
+        resampled["asset_id"] = latest["asset_id"]
+        resampled["exchange"] = latest["exchange"]
+        resampled["symbol"] = latest["symbol"]
+        bars.append(resampled)
+
+    if not bars:
+        return summarize_signal_v2_groups(pd.DataFrame())
+
+    features = _prepare_feature_frame(pd.concat(bars, ignore_index=True))
+    window = features[(features["ts"] >= start_utc) & (features["ts"] < end_utc)].copy()
+    if window.empty:
+        return summarize_signal_v2_groups(pd.DataFrame())
+    return summarize_signal_v2_groups(window)

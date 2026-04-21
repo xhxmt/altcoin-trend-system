@@ -23,7 +23,7 @@ from altcoin_trend.scheduler import (
 from altcoin_trend.signals.explain import build_explain_text
 from altcoin_trend.signals.ranking import aggregate_rank_rows_by_symbol
 from altcoin_trend.signals.telegram import TelegramClient
-from altcoin_trend.trade_backtest import run_trade_candidate_backtest
+from altcoin_trend.trade_backtest import run_signal_v2_backtest, run_trade_candidate_backtest
 
 app = typer.Typer(help="Altcoin trend system CLI")
 
@@ -273,6 +273,35 @@ def evaluate_trade_candidates(
             f"future_max={signal['future_max_return_1h'] * 100:.2f}% "
             f"r1h={signal['return_1h_pct']:.2f}% r4h={signal['return_4h_pct']:.2f}% "
             f"r24h={signal['return_24h_pct']:.2f}% vol24h={signal['volume_ratio_24h']:.2f}x"
+        )
+
+
+@app.command("evaluate-signals-v2")
+def evaluate_signals_v2(
+    from_ts: str = typer.Option(..., "--from"),
+    to_ts: str = typer.Option(..., "--to"),
+    exchange: str = typer.Option("binance", "--exchange"),
+) -> None:
+    start = _parse_iso_datetime(from_ts)
+    end = _parse_iso_datetime(to_ts)
+    if start >= end:
+        raise typer.BadParameter("--from must be earlier than --to")
+
+    settings = load_settings()
+    engine = build_engine(settings)
+    summary = run_signal_v2_backtest(
+        engine=engine,
+        exchange=exchange,
+        start=start,
+        end=end,
+    )
+    typer.echo(f"Signal v2 backtest exchange={exchange} from={start.isoformat()} to={end.isoformat()}")
+    for group_name, stats in summary.items():
+        typer.echo(
+            f"{group_name} signals={int(stats.get('signal_count', 0))} "
+            f"hit10_before_dd8={float(stats.get('hit_10pct_before_drawdown_8pct_rate', 0.0)):.2f}% "
+            f"avg_mfe_1h={float(stats.get('avg_mfe_1h_pct', 0.0)):.2f}% "
+            f"avg_mae_1h={float(stats.get('avg_mae_1h_pct', 0.0)):.2f}%"
         )
 
 

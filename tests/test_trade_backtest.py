@@ -5,6 +5,7 @@ import pandas as pd
 from altcoin_trend.trade_backtest import (
     compute_forward_path_labels,
     evaluate_trade_candidate_bars,
+    run_signal_v2_backtest,
     summarize_signal_v2_groups,
 )
 
@@ -428,3 +429,70 @@ def test_summarize_signal_v2_groups_reports_cross_exchange_and_chase_risk_groups
     assert summary["high_chase_risk"]["signal_count"] == 1
     assert summary["low_or_medium_chase_risk"]["signal_count"] == 1
     assert summary["cross_exchange_confirmed"]["median_time_to_hit_10pct_minutes"] == 30.0
+
+
+def test_run_signal_v2_backtest_filters_window_before_summarizing(monkeypatch):
+    market_rows = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BTCUSDT",
+                "ts": pd.Timestamp("2025-12-31T23:00:00Z"),
+                "open": 99.0,
+                "high": 100.0,
+                "low": 98.0,
+                "close": 99.5,
+                "volume": 10.0,
+                "quote_volume": 10.0,
+                "trade_count": 1,
+            },
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BTCUSDT",
+                "ts": pd.Timestamp("2026-01-01T00:00:00Z"),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10.0,
+                "quote_volume": 10.0,
+                "trade_count": 1,
+            },
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BTCUSDT",
+                "ts": pd.Timestamp("2026-01-01T01:00:00Z"),
+                "open": 101.0,
+                "high": 102.0,
+                "low": 100.0,
+                "close": 101.5,
+                "volume": 10.0,
+                "quote_volume": 10.0,
+                "trade_count": 1,
+            },
+        ]
+    )
+    captured: dict[str, pd.DataFrame] = {}
+
+    monkeypatch.setattr("altcoin_trend.trade_backtest._fetch_market_rows", lambda engine, exchange, start, end: market_rows)
+    monkeypatch.setattr("altcoin_trend.trade_backtest.resample_market_1m", lambda group, timeframe: group.copy())
+    monkeypatch.setattr("altcoin_trend.trade_backtest._prepare_feature_frame", lambda frame: frame.assign(ts=pd.to_datetime(frame["ts"], utc=True)))
+
+    def fake_summarize(window: pd.DataFrame):
+        captured["window"] = window.copy()
+        return {"continuation_A": {"signal_count": len(window), "hit_10pct_before_drawdown_8pct_rate": 50.0, "avg_mfe_1h_pct": 12.0, "avg_mae_1h_pct": 1.0}}
+
+    monkeypatch.setattr("altcoin_trend.trade_backtest.summarize_signal_v2_groups", fake_summarize)
+
+    summary = run_signal_v2_backtest(
+        engine=object(),
+        exchange="binance",
+        start=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc),
+        end=datetime(2026, 1, 1, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert summary["continuation_A"]["signal_count"] == 1
+    assert list(captured["window"]["ts"]) == [pd.Timestamp("2026-01-01T01:00:00Z")]

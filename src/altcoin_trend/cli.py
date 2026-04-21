@@ -14,6 +14,7 @@ from altcoin_trend.ingest.bootstrap import bootstrap_exchange
 from altcoin_trend.ingest.derivatives import bootstrap_derivatives
 from altcoin_trend.scheduler import (
     load_explain_row,
+    load_opportunity_rows,
     load_rank_rows,
     load_trade_candidate_rows,
     process_alerts,
@@ -208,6 +209,27 @@ def trade_candidates(limit: int = typer.Option(30, "--limit", min=1)) -> None:
             f"{index}. {row['exchange']}:{row['symbol']} score={row['final_score']} tier={row['tier']} "
             f"r1h={float(row['return_1h_pct']):.2f}% r4h={float(row['return_4h_pct']):.2f}% "
             f"r24h={float(row['return_24h_pct']):.2f}% vol24h={float(row['volume_ratio_24h']):.2f}x"
+        )
+
+
+@app.command("opportunities")
+def opportunities(limit: int = typer.Option(30, "--limit", min=1)) -> None:
+    settings = load_settings()
+    engine = build_engine(settings)
+    rows = load_opportunity_rows(engine, limit=limit)
+    if not rows:
+        typer.echo("No opportunities found in latest snapshot")
+        return
+    typer.echo(f"Opportunities limit={limit}")
+    for index, row in enumerate(rows, start=1):
+        typer.echo(
+            f"{index}. {row['exchange']}:{row['symbol']} "
+            f"actionability={float(row['actionability_score']):.1f} "
+            f"priority={int(row['signal_priority'])} "
+            f"continuation={row.get('continuation_grade') or '-'} "
+            f"ignition={row.get('ignition_grade') or '-'} "
+            f"chase_risk={float(row['chase_risk_score']):.1f} "
+            f"score={float(row['final_score']):.1f}"
         )
 
 

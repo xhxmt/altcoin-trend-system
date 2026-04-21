@@ -791,6 +791,43 @@ def test_load_trade_candidate_rows_selects_volume_ratio_1h():
     assert captured["params"] == {"limit": 30}
 
 
+def test_load_opportunity_rows_orders_by_actionability_and_filters_signal_priority():
+    captured = {}
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class Connection:
+        def execute(self, statement, params):
+            captured["sql"] = str(statement)
+            captured["params"] = params
+            return Result()
+
+    class Begin:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class Engine:
+        def begin(self):
+            return Begin()
+
+    from altcoin_trend.scheduler import load_opportunity_rows
+
+    load_opportunity_rows(Engine(), limit=12)
+
+    assert "fs.tier" not in captured["sql"]
+    assert "fs.actionability_score DESC, fs.signal_priority DESC, fs.final_score DESC" in captured["sql"]
+    assert "AND fs.signal_priority > 0" in captured["sql"]
+    assert captured["params"] == {"limit": 12}
+
+
 def test_load_explain_row_selects_volume_ratio_1h():
     captured = {}
 

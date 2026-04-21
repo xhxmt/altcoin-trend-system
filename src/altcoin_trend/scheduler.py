@@ -581,6 +581,45 @@ def load_trade_candidate_rows(engine: Engine, limit: int = 30) -> list[dict[str,
         return [dict(row) for row in result.mappings().all()]
 
 
+def load_opportunity_rows(engine: Engine, limit: int = 30) -> list[dict[str, Any]]:
+    statement = text(
+        """
+        SELECT
+            fs.ts,
+            fs.asset_id,
+            fs.exchange,
+            fs.symbol,
+            a.base_asset,
+            fs.close,
+            fs.final_score,
+            fs.continuation_grade,
+            fs.ignition_grade,
+            fs.signal_priority,
+            fs.risk_flags,
+            fs.chase_risk_score,
+            fs.actionability_score,
+            fs.cross_exchange_confirmed,
+            fs.return_1h_pct,
+            fs.return_4h_pct,
+            fs.return_24h_pct,
+            fs.volume_ratio_1h,
+            fs.volume_impulse_score
+        FROM alt_signal.feature_snapshot AS fs
+        JOIN alt_core.asset_master AS a ON a.asset_id = fs.asset_id
+        WHERE fs.ts = (
+              SELECT MAX(ts)
+              FROM alt_signal.feature_snapshot
+          )
+          AND fs.signal_priority > 0
+        ORDER BY fs.actionability_score DESC, fs.signal_priority DESC, fs.final_score DESC
+        LIMIT :limit
+        """
+    )
+    with engine.begin() as connection:
+        result = connection.execute(statement, {"limit": limit})
+        return [dict(row) for row in result.mappings().all()]
+
+
 def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, Any] | None:
     statement = text(
         """

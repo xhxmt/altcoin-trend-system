@@ -190,6 +190,37 @@ def test_cli_rank_can_aggregate_symbols(monkeypatch):
     assert "2." not in result.output
 
 
+def test_opportunities_command_prints_actionability_rows(monkeypatch):
+    from typer.testing import CliRunner
+
+    from altcoin_trend.cli import app
+
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: object())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.cli.load_opportunity_rows",
+        lambda engine, limit: [
+            {
+                "exchange": "binance",
+                "symbol": "RAVEUSDT",
+                "actionability_score": 68.5,
+                "signal_priority": 3,
+                "continuation_grade": None,
+                "ignition_grade": "EXTREME",
+                "chase_risk_score": 80.0,
+                "final_score": 63.0,
+            }
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["opportunities", "--limit", "5"])
+
+    assert result.exit_code == 0
+    assert "RAVEUSDT" in result.output
+    assert "actionability=68.5" in result.output
+    assert "ignition=EXTREME" in result.output
+
+
 def test_cli_run_once_reports_pipeline_status(monkeypatch):
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())

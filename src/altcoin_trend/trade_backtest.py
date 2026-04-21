@@ -170,6 +170,14 @@ def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, flo
             return 0.0
         return round(float((series >= threshold).mean() * 100.0), 6)
 
+    def _rate_from_explicit_column(group: pd.DataFrame, column: str) -> float:
+        if column not in group.columns:
+            return 0.0
+        series = _as_numeric(group, column).fillna(0.0)
+        if series.empty:
+            return 0.0
+        return round(float((series > 0).mean() * 100.0), 6)
+
     def _median_minutes(group: pd.DataFrame, column: str) -> float:
         series = _as_numeric(group, column).dropna()
         if series.empty:
@@ -186,11 +194,7 @@ def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, flo
             "signal_count": int(len(group)),
             "hit_5pct_rate": _rate_from_column_or_threshold(group, ("hit_5pct_before_drawdown_5pct", "hit_5pct_rate"), 5.0),
             "hit_10pct_rate": _rate_from_column_or_threshold(group, ("hit_10pct_before_drawdown_8pct", "hit_10pct_rate"), 10.0),
-            "hit_10pct_before_drawdown_8pct_rate": _rate_from_column_or_threshold(
-                group,
-                ("hit_10pct_before_drawdown_8pct",),
-                10.0,
-            ),
+            "hit_10pct_before_drawdown_8pct_rate": _rate_from_explicit_column(group, "hit_10pct_before_drawdown_8pct"),
             "avg_mfe_1h_pct": _average(group, "mfe_1h_pct"),
             "avg_mfe_4h_pct": _average(group, "mfe_4h_pct"),
             "avg_mfe_24h_pct": _average(group, "mfe_24h_pct"),

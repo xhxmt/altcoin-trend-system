@@ -18,7 +18,7 @@ from altcoin_trend.features.scoring import ScoreInput, compute_final_score, max_
 from altcoin_trend.signals.alerts import build_alert_event_rows
 from altcoin_trend.signals.ranking import rank_scores
 from altcoin_trend.signals.telegram import TelegramClient
-from altcoin_trend.signals.trade_candidate import is_continuation_candidate, is_ignition_candidate, is_trade_candidate
+from altcoin_trend.signals.v2 import compute_volume_impulse_score, evaluate_signal_v2
 
 
 @dataclass(frozen=True)
@@ -149,6 +149,7 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
         "return_24h_pct": None,
         "return_7d_pct": None,
         "return_30d_pct": None,
+        "volume_ratio_1h": None,
         "volume_ratio_24h": None,
         "ema20_4h": None,
         "ema60_4h": None,
@@ -201,6 +202,11 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
         ):
             features[key] = _return_pct_since(ordered, hours)
         features["volume_ratio_24h"] = _trailing_volume_ratio_24h(ordered)
+        latest_ts = ordered["ts"].iloc[-1]
+        lookback_start = latest_ts - pd.Timedelta(hours=24)
+        features["volume_ratio_1h"] = (
+            features["volume_ratio_24h"] if ordered["ts"].min() <= lookback_start else 1.0
+        )
         latest = ordered.iloc[-1]
         latest_close = float(latest["close"])
         for days, key in ((7, "return_7d"), (30, "return_30d")):
@@ -215,22 +221,39 @@ def _higher_timeframe_features(group: pd.DataFrame) -> dict[str, Any]:
     return features
 
 
-def _assign_return_percentiles(feature_rows: list[dict[str, Any]]) -> None:
+def _assign_return_percentiles_and_ranks(feature_rows: list[dict[str, Any]]) -> None:
     if not feature_rows:
         return
     frame = pd.DataFrame(feature_rows)
-    for source_column, output_column in (
-        ("return_24h_pct", "return_24h_percentile"),
-        ("return_7d_pct", "return_7d_percentile"),
+    for source_column, percentile_column, rank_column in (
+        ("return_24h_pct", "return_24h_percentile", "return_24h_rank"),
+        ("return_7d_pct", "return_7d_percentile", "return_7d_rank"),
     ):
         if source_column not in frame.columns:
             for row in feature_rows:
-                row[output_column] = None
+                row[percentile_column] = None
+                row[rank_column] = None
             continue
-        frame[output_column] = frame.groupby("exchange")[source_column].rank(pct=True)
+        frame[percentile_column] = frame.groupby("exchange")[source_column].rank(pct=True)
+        frame[rank_column] = frame.groupby("exchange")[source_column].rank(method="min", ascending=False)
         for index, row in enumerate(feature_rows):
-            value = frame.iloc[index][output_column]
-            row[output_column] = None if pd.isna(value) else float(value)
+            percentile = frame.iloc[index][percentile_column]
+            rank = frame.iloc[index][rank_column]
+            row[percentile_column] = None if pd.isna(percentile) else float(percentile)
+            row[rank_column] = None if pd.isna(rank) else int(rank)
+
+
+def _apply_signal_v2_result(row: dict[str, Any]) -> None:
+    result = evaluate_signal_v2(row)
+    row["continuation_grade"] = result.continuation_grade
+    row["ignition_grade"] = result.ignition_grade
+    row["signal_priority"] = result.signal_priority
+    row["risk_flags"] = list(result.risk_flags)
+    row["chase_risk_score"] = result.chase_risk_score
+    row["actionability_score"] = result.actionability_score
+    row["continuation_candidate"] = result.continuation_grade is not None
+    row["ignition_candidate"] = result.ignition_grade is not None
+    row["trade_candidate"] = result.continuation_grade is not None
 
 
 def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -269,8 +292,6 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
             derivatives.derivatives_score,
         )
         score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
-        continuation_candidate = False
-        ignition_candidate = False
         feature_rows.append(
             {
                 "ts": snapshot_ts,
@@ -297,20 +318,40 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "final_score": score_result.final_score,
                 "tier": score_result.tier,
                 "primary_reason": score_result.primary_reason,
-                "continuation_candidate": continuation_candidate,
-                "ignition_candidate": ignition_candidate,
+                "volume_impulse_score": 0.0,
+                "return_24h_rank": None,
+                "return_7d_rank": None,
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "signal_priority": 0,
+                "risk_flags": [],
+                "chase_risk_score": 0.0,
+                "actionability_score": 0.0,
+                "cross_exchange_confirmed": False,
+                "continuation_candidate": False,
+                "ignition_candidate": False,
+                "trade_candidate": False,
             }
         )
 
-    _assign_return_percentiles(feature_rows)
+    _assign_return_percentiles_and_ranks(feature_rows)
     for row in feature_rows:
-        row["continuation_candidate"] = is_continuation_candidate(row)
-        row["ignition_candidate"] = is_ignition_candidate(row)
-        row["trade_candidate"] = is_trade_candidate(row)
-        if row["ignition_candidate"]:
+        row["volume_impulse_score"] = compute_volume_impulse_score(row)
+        _apply_signal_v2_result(row)
+
+    signal_counts_by_symbol: dict[str, int] = {}
+    for row in feature_rows:
+        if row["continuation_grade"] is not None or row["ignition_grade"] is not None:
+            symbol = str(row["symbol"])
+            signal_counts_by_symbol[symbol] = signal_counts_by_symbol.get(symbol, 0) + 1
+
+    for row in feature_rows:
+        row["cross_exchange_confirmed"] = signal_counts_by_symbol.get(str(row["symbol"]), 0) >= 2
+        _apply_signal_v2_result(row)
+        if row["ignition_grade"] in {"A", "B"}:
             row["tier"] = max_tier(row["tier"], "watchlist")
-            if float(row.get("return_1h_pct") or 0.0) >= 15.0 and float(row.get("return_24h_pct") or 0.0) >= 60.0:
-                row["tier"] = max_tier(row["tier"], "strong")
+        if row["ignition_grade"] == "EXTREME":
+            row["tier"] = max_tier(row["tier"], "strong")
 
     rank_rows: list[dict[str, Any]] = []
     for scope, rows in (("all", feature_rows),):
@@ -337,6 +378,13 @@ def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[st
                 "trade_candidate": bool(row.get("trade_candidate", False)),
                 "continuation_candidate": bool(row.get("continuation_candidate", False)),
                 "ignition_candidate": bool(row.get("ignition_candidate", False)),
+                "continuation_grade": row.get("continuation_grade"),
+                "ignition_grade": row.get("ignition_grade"),
+                "signal_priority": int(row.get("signal_priority", 0)),
+                "risk_flags": list(row.get("risk_flags", [])),
+                "chase_risk_score": float(row.get("chase_risk_score", 0.0)),
+                "actionability_score": float(row.get("actionability_score", 0.0)),
+                "cross_exchange_confirmed": bool(row.get("cross_exchange_confirmed", False)),
             },
         }
         for row in ranked
@@ -391,9 +439,12 @@ def write_run_once_snapshots(engine: Engine, snapshot_ts: datetime | None = None
 
     feature_insert_rows = [
         {
-            key: value
-            for key, value in row.items()
-            if key not in {"base_asset", "tier", "primary_reason"}
+            **{
+                key: value
+                for key, value in row.items()
+                if key not in {"base_asset", "tier", "primary_reason"}
+            },
+            "risk_flags": Jsonb(row.get("risk_flags", [])),
         }
         for row in feature_rows
     ]
@@ -433,9 +484,20 @@ def load_rank_rows(engine: Engine, rank_scope: str = "all", limit: int = 30) -> 
             fs.return_24h_pct,
             fs.return_7d_pct,
             fs.return_30d_pct,
+            fs.volume_ratio_1h,
             fs.volume_ratio_24h,
             fs.return_24h_percentile,
             fs.return_7d_percentile,
+            fs.volume_impulse_score,
+            fs.return_24h_rank,
+            fs.return_7d_rank,
+            fs.continuation_grade,
+            fs.ignition_grade,
+            fs.signal_priority,
+            fs.risk_flags,
+            fs.chase_risk_score,
+            fs.actionability_score,
+            fs.cross_exchange_confirmed,
             fs.trade_candidate,
             fs.continuation_candidate,
             fs.ignition_candidate,
@@ -483,9 +545,20 @@ def load_trade_candidate_rows(engine: Engine, limit: int = 30) -> list[dict[str,
             fs.return_24h_pct,
             fs.return_7d_pct,
             fs.return_30d_pct,
+            fs.volume_ratio_1h,
             fs.volume_ratio_24h,
             fs.return_24h_percentile,
             fs.return_7d_percentile,
+            fs.volume_impulse_score,
+            fs.return_24h_rank,
+            fs.return_7d_rank,
+            fs.continuation_grade,
+            fs.ignition_grade,
+            fs.signal_priority,
+            fs.risk_flags,
+            fs.chase_risk_score,
+            fs.actionability_score,
+            fs.cross_exchange_confirmed,
             COALESCE(r.tier, 'rejected') AS tier,
             COALESCE(r.rank, 0) AS rank
         FROM alt_signal.feature_snapshot AS fs
@@ -524,9 +597,20 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
             fs.return_24h_pct,
             fs.return_7d_pct,
             fs.return_30d_pct,
+            fs.volume_ratio_1h,
             fs.volume_ratio_24h,
             fs.return_24h_percentile,
             fs.return_7d_percentile,
+            fs.volume_impulse_score,
+            fs.return_24h_rank,
+            fs.return_7d_rank,
+            fs.continuation_grade,
+            fs.ignition_grade,
+            fs.signal_priority,
+            fs.risk_flags,
+            fs.chase_risk_score,
+            fs.actionability_score,
+            fs.cross_exchange_confirmed,
             fs.trade_candidate,
             fs.continuation_candidate,
             fs.ignition_candidate,

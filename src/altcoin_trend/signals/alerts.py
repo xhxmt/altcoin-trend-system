@@ -17,6 +17,20 @@ def _get(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
     return getattr(row, key, default)
 
 
+def _float_or_default(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _display_exchange(row: Mapping[str, Any] | Any) -> str:
+    value = _get(row, "exchange", "unknown")
+    return str(value) if value else "unknown"
+
+
 def _normalize_items(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -222,7 +236,50 @@ def _v2_alert_type(row: Mapping[str, Any] | Any) -> str | None:
     return None
 
 
-def build_signal_v2_alert_message(row: Mapping[str, Any] | Any, alert_type: str) -> str:
+def _signal_family(alert_type: str) -> str:
+    if alert_type in {"ignition_extreme", "ignition_detected"}:
+        return "ignition"
+    if alert_type == "continuation_confirmed":
+        return "continuation"
+    return alert_type
+
+
+def _alert_type_severity(alert_type: str) -> int:
+    if alert_type == "ignition_extreme":
+        return 3
+    if alert_type in {"continuation_confirmed", "ignition_detected"}:
+        return 2
+    if alert_type == "exhaustion_risk":
+        return 1
+    return 0
+
+
+def _exchange_signal_label(row: Mapping[str, Any] | Any, family: str) -> str:
+    if family == "ignition":
+        ignition = _get(row, "ignition_grade", None)
+        return f"IGNITION_{ignition}" if ignition else "NONE"
+    if family == "continuation":
+        continuation = _get(row, "continuation_grade", None)
+        return f"CONTINUATION_{continuation}" if continuation else "NONE"
+    if family == "exhaustion_risk":
+        return "EXHAUSTION_RISK"
+    return "NONE"
+
+
+def _v2_best_key(row: Mapping[str, Any] | Any, alert_type: str) -> tuple[int, float, float, float]:
+    return (
+        _alert_type_severity(alert_type),
+        _float_or_default(_get(row, "actionability_score", 0.0)),
+        _float_or_default(_get(row, "signal_priority", 0.0)),
+        _float_or_default(_get(row, "final_score", 0.0)),
+    )
+
+
+def build_signal_v2_alert_message(
+    row: Mapping[str, Any] | Any,
+    alert_type: str,
+    per_exchange_signals: Mapping[str, str] | None = None,
+) -> str:
     symbol = str(_get(row, "symbol", "unknown"))
     continuation_grade = _get(row, "continuation_grade", None)
     ignition_grade = _get(row, "ignition_grade", None)
@@ -240,17 +297,19 @@ def build_signal_v2_alert_message(row: Mapping[str, Any] | Any, alert_type: str)
         return "n/a" if value is None else value
 
     risks = _normalize_items(_get(row, "risk_flags", None))
-    return "\n".join(
-        [
-            header,
-            f"1h {display('return_1h_pct')} | 24h {display('return_24h_pct')}",
-            f"RS {display('relative_strength_score')} | Vol impulse {display('volume_impulse_score')} | Deriv {display('derivatives_score')}",
-            f"Cross-exchange: {'yes' if bool(_get(row, 'cross_exchange_confirmed', False)) else 'no'}",
-            f"Chase risk: {display('chase_risk_score')}",
-            f"Actionability: {display('actionability_score')}",
-            f"Risks: {', '.join(risks) if risks else 'none'}",
-        ]
-    )
+    lines = [
+        header,
+        f"1h {display('return_1h_pct')} | 24h {display('return_24h_pct')}",
+        f"RS {display('relative_strength_score')} | Vol impulse {display('volume_impulse_score')} | Deriv {display('derivatives_score')}",
+        f"Cross-exchange: {'yes' if bool(_get(row, 'cross_exchange_confirmed', False)) else 'no'}",
+        f"Chase risk: {display('chase_risk_score')}",
+        f"Actionability: {display('actionability_score')}",
+    ]
+    if per_exchange_signals:
+        signal_parts = [f"{exchange}={label}" for exchange, label in per_exchange_signals.items()]
+        lines.append(f"Signals: {' | '.join(signal_parts)}")
+    lines.append(f"Risks: {', '.join(risks) if risks else 'none'}")
+    return "\n".join(lines)
 
 
 def _recent_event_key(event: Mapping[str, Any]) -> tuple[int, str]:
@@ -283,14 +342,52 @@ def build_alert_event_rows(
 ) -> list[dict[str, Any]]:
     current_time = _require_aware_datetime(now)
     events_by_key: dict[tuple[int, str], Mapping[str, Any]] = {}
+    v2_events_by_symbol_family: dict[tuple[str, str], Mapping[str, Any]] = {}
     for event in recent_events:
         if "asset_id" not in event or "alert_type" not in event or "ts" not in event:
             continue
-        key = _recent_event_key(event)
-        existing = events_by_key.get(key)
-        if existing is None or _require_aware_datetime(event["ts"]) > _require_aware_datetime(existing["ts"]):
-            events_by_key[key] = event
+        event_ts = _require_aware_datetime(event["ts"])
+        asset_key = _recent_event_key(event)
+        existing = events_by_key.get(asset_key)
+        if existing is None or event_ts > _require_aware_datetime(existing["ts"]):
+            events_by_key[asset_key] = event
+
+        alert_type = str(event["alert_type"])
+        if _alert_type_severity(alert_type) <= 0:
+            continue
+        symbol = event.get("symbol")
+        if not symbol:
+            payload = event.get("payload") or {}
+            symbol = payload.get("symbol") if isinstance(payload, Mapping) else None
+        if not symbol:
+            continue
+        symbol_family_key = (str(symbol), _signal_family(alert_type))
+        existing_v2 = v2_events_by_symbol_family.get(symbol_family_key)
+        if existing_v2 is None or event_ts > _require_aware_datetime(existing_v2["ts"]):
+            v2_events_by_symbol_family[symbol_family_key] = event
     alert_rows: list[dict[str, Any]] = []
+    best_v2_by_symbol_family: dict[tuple[str, str], Mapping[str, Any]] = {}
+    per_exchange_by_symbol_family: dict[tuple[str, str], dict[str, str]] = {}
+    asset_ids_by_symbol_family: dict[tuple[str, str], list[int]] = {}
+    for candidate_row in rank_rows:
+        candidate_type = _v2_alert_type(candidate_row)
+        if candidate_type is None:
+            continue
+        symbol = str(_get(candidate_row, "symbol"))
+        family = _signal_family(candidate_type)
+        key = (symbol, family)
+        exchange = _display_exchange(candidate_row)
+        per_exchange_by_symbol_family.setdefault(key, {})[exchange] = _exchange_signal_label(candidate_row, family)
+        try:
+            asset_ids_by_symbol_family.setdefault(key, []).append(int(_get(candidate_row, "asset_id")))
+        except (TypeError, ValueError):
+            pass
+        current_best = best_v2_by_symbol_family.get(key)
+        current_best_type = _v2_alert_type(current_best) if current_best is not None else None
+        if current_best is None or (
+            current_best_type is not None and _v2_best_key(candidate_row, candidate_type) > _v2_best_key(current_best, current_best_type)
+        ):
+            best_v2_by_symbol_family[key] = candidate_row
 
     for row in rank_rows:
         asset_id = int(_get(row, "asset_id"))
@@ -298,40 +395,48 @@ def build_alert_event_rows(
         previous_tier = _previous_tier_for_asset(asset_id, recent_events)
         v2_alert_type = _v2_alert_type(row)
         if v2_alert_type is not None:
-            priority = _alert_priority_for_type(v2_alert_type, row)
-            effective_cooldown = _cooldown_for_priority(priority, cooldown_seconds)
-            recent_event = events_by_key.get((asset_id, v2_alert_type))
-            if recent_event is None or not _event_recent_enough(recent_event, current_time, effective_cooldown):
-                alert_rows.append(
-                    {
-                        "ts": current_time,
-                        "asset_id": asset_id,
-                        "symbol": str(_get(row, "symbol")),
-                        "alert_type": v2_alert_type,
-                        "final_score": float(_get(row, "final_score", 0.0)),
-                        "message": build_signal_v2_alert_message(row, v2_alert_type),
-                        "payload": {
-                            "exchange": _get(row, "exchange", "unknown"),
-                            "current_tier": current_tier,
-                            "previous_tier": previous_tier,
-                            "rank": _get(row, "rank", None),
-                            "priority": priority,
-                            "grades": {
-                                "continuation": _get(row, "continuation_grade", None),
-                                "ignition": _get(row, "ignition_grade", None),
+            symbol = str(_get(row, "symbol"))
+            family = _signal_family(v2_alert_type)
+            key = (symbol, family)
+            if best_v2_by_symbol_family.get(key) is row:
+                priority = _alert_priority_for_type(v2_alert_type, row)
+                effective_cooldown = _cooldown_for_priority(priority, cooldown_seconds)
+                recent_event = v2_events_by_symbol_family.get(key) or events_by_key.get((asset_id, v2_alert_type))
+                if recent_event is None or not _event_recent_enough(recent_event, current_time, effective_cooldown):
+                    per_exchange_signals = per_exchange_by_symbol_family.get(key, {})
+                    alert_rows.append(
+                        {
+                            "ts": current_time,
+                            "asset_id": asset_id,
+                            "symbol": symbol,
+                            "alert_type": v2_alert_type,
+                            "final_score": float(_get(row, "final_score", 0.0)),
+                            "message": build_signal_v2_alert_message(row, v2_alert_type, per_exchange_signals),
+                            "payload": {
+                                "exchange": _display_exchange(row),
+                                "current_tier": current_tier,
+                                "previous_tier": previous_tier,
+                                "rank": _get(row, "rank", None),
+                                "priority": priority,
+                                "grades": {
+                                    "continuation": _get(row, "continuation_grade", None),
+                                    "ignition": _get(row, "ignition_grade", None),
+                                },
+                                "continuation_grade": _get(row, "continuation_grade", None),
+                                "ignition_grade": _get(row, "ignition_grade", None),
+                                "signal_priority": _get(row, "signal_priority", None),
+                                "actionability_score": _get(row, "actionability_score", None),
+                                "chase_risk_score": _get(row, "chase_risk_score", None),
+                                "risk_flags": list(_normalize_items(_get(row, "risk_flags", None))),
+                                "cross_exchange_confirmed": bool(_get(row, "cross_exchange_confirmed", False)),
+                                "per_exchange_signals": per_exchange_signals,
+                                "asset_ids": asset_ids_by_symbol_family.get(key, []),
+                                "exchanges": list(per_exchange_signals),
                             },
-                            "continuation_grade": _get(row, "continuation_grade", None),
-                            "ignition_grade": _get(row, "ignition_grade", None),
-                            "signal_priority": _get(row, "signal_priority", None),
-                            "actionability_score": _get(row, "actionability_score", None),
-                            "chase_risk_score": _get(row, "chase_risk_score", None),
-                            "risk_flags": list(_normalize_items(_get(row, "risk_flags", None))),
-                            "cross_exchange_confirmed": bool(_get(row, "cross_exchange_confirmed", False)),
-                        },
-                        "delivery_status": "pending",
-                        "delivery_error": None,
-                    }
-                )
+                            "delivery_status": "pending",
+                            "delivery_error": None,
+                        }
+                    )
         if is_explosive_move_early_signal(row):
             recent_event = events_by_key.get((asset_id, "explosive_move_early"))
             if recent_event is None or not _event_recent_enough(recent_event, current_time, cooldown_seconds):
@@ -344,7 +449,7 @@ def build_alert_event_rows(
                         "final_score": float(_get(row, "final_score", 0.0)),
                         "message": build_explosive_move_early_alert_message(row),
                         "payload": {
-                            "exchange": _get(row, "exchange", "unknown"),
+                            "exchange": _display_exchange(row),
                             "current_tier": current_tier,
                             "previous_tier": previous_tier,
                             "rank": _get(row, "rank", None),
@@ -374,7 +479,7 @@ def build_alert_event_rows(
 
         message = build_strong_alert_message(row)
         payload = {
-            "exchange": _get(row, "exchange", "unknown"),
+            "exchange": _display_exchange(row),
             "current_tier": current_tier,
             "previous_tier": previous_tier,
             "rank": _get(row, "rank", None),

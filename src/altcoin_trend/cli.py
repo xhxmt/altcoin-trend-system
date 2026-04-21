@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import typer
 
@@ -61,6 +61,21 @@ def _parse_horizons_option(value: str):
         return parse_horizons(value)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _parse_since_duration(value: str) -> int:
+    value = value.strip().lower()
+    if not value:
+        raise typer.BadParameter("--since must not be empty")
+    unit = value[-1]
+    number_text = value[:-1]
+    if unit not in {"m", "h", "d"} or not number_text.isdigit():
+        raise typer.BadParameter("--since must use formats like 30m, 6h, or 2d")
+    amount = int(number_text)
+    if amount <= 0:
+        raise typer.BadParameter("--since must be greater than zero")
+    multipliers = {"m": 60, "h": 3600, "d": 86400}
+    return amount * multipliers[unit]
 
 
 @app.command("init-db")
@@ -180,6 +195,8 @@ def health() -> None:
 def alerts(since: str = typer.Option("24h", "--since")) -> None:
     settings = load_settings()
     engine = build_engine(settings)
+    lookback_seconds = _parse_since_duration(since)
+    now = datetime.now(timezone.utc)
     telegram_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         telegram_client = TelegramClient(
@@ -188,9 +205,10 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
         )
     inserted, sent = process_alerts(
         engine=engine,
-        now=datetime.now(timezone.utc),
+        now=now,
         cooldown_seconds=settings.alert_cooldown_seconds,
         telegram_client=telegram_client,
+        lookback_seconds=lookback_seconds,
     )
     typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={since}")
 

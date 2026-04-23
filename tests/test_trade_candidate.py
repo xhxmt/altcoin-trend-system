@@ -111,6 +111,7 @@ def test_ultra_high_conviction_candidate_accepts_research_rule_shape():
 
 def test_ultra_high_conviction_candidate_rejects_overextended_or_unconfirmed_rows():
     assert is_ultra_high_conviction_candidate(_ultra_row(return_1h_pct=11.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_1h_pct=40.1)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=37.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=110.1)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_pct=49.9)) is False

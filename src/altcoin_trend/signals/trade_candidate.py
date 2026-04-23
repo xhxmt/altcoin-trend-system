@@ -37,6 +37,7 @@ IGNITION_RULE = IgnitionCandidateRule()
 @dataclass(frozen=True)
 class UltraHighConvictionRule:
     min_return_1h_pct: float = 12.0
+    max_return_1h_pct: float = 40.0
     min_return_4h_pct: float = 38.0
     max_return_4h_pct: float = 110.0
     min_return_24h_pct: float = 50.0
@@ -162,6 +163,7 @@ def is_ultra_high_conviction_candidate(
 
     return (
         values["return_1h_pct"] >= rule.min_return_1h_pct
+        and values["return_1h_pct"] <= rule.max_return_1h_pct
         and values["return_4h_pct"] >= rule.min_return_4h_pct
         and values["return_4h_pct"] <= rule.max_return_4h_pct
         and values["return_24h_pct"] >= rule.min_return_24h_pct

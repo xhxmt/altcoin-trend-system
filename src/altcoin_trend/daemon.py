@@ -60,9 +60,6 @@ def sync_market_inputs(
     now: datetime,
     instrument_cache: InstrumentCache | None = None,
 ) -> InputSyncResult:
-    if not settings.allowlist_symbols:
-        return InputSyncResult(status="skipped", message="market sync requires ACTS_SYMBOL_ALLOWLIST")
-
     bars_written = 0
     derivatives_updated = 0
     instruments_selected = 0
@@ -112,19 +109,16 @@ def main() -> None:
 
     while True:
         now = _utc_now()
-        if settings.allowlist_symbols:
-            try:
-                sync_result = sync_market_inputs(
-                    engine=engine,
-                    settings=settings,
-                    now=now,
-                    instrument_cache=instrument_cache,
-                )
-                logger.info("Market input sync status=%s message=%s", sync_result.status, sync_result.message)
-            except Exception:
-                logger.exception("Market input sync failed; continuing with existing market data")
-        else:
-            logger.warning("Market input sync skipped: ACTS_SYMBOL_ALLOWLIST is required")
+        try:
+            sync_result = sync_market_inputs(
+                engine=engine,
+                settings=settings,
+                now=now,
+                instrument_cache=instrument_cache,
+            )
+            logger.info("Market input sync status=%s message=%s", sync_result.status, sync_result.message)
+        except Exception:
+            logger.exception("Market input sync failed; continuing with existing market data")
 
         result = run_once_pipeline(engine=engine)
         logger.info("Pipeline result status=%s message=%s", result.status, result.message)

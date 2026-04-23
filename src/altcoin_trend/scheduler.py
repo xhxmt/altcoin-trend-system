@@ -833,9 +833,10 @@ def process_alerts(
     cooldown_seconds: int,
     telegram_client: TelegramClient | None = None,
     rank_limit: int = 30,
+    recent_since: datetime | None = None,
 ) -> tuple[int, int]:
     rank_rows = load_rank_rows(engine, rank_scope="all", limit=rank_limit)
-    since = now - timedelta(seconds=max(cooldown_seconds, MAX_SIGNAL_V2_COOLDOWN_SECONDS))
+    since = recent_since or now - timedelta(seconds=max(cooldown_seconds, MAX_SIGNAL_V2_COOLDOWN_SECONDS))
     recent_events = _load_recent_alert_events(engine, since)
     alert_rows = build_alert_event_rows(
         rank_rows=rank_rows,

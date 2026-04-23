@@ -51,7 +51,7 @@ def test_daemon_runs_one_iteration_with_configured_sleep(monkeypatch):
     assert sleep_calls == [17]
 
 
-def test_daemon_skips_market_sync_without_allowlist(monkeypatch):
+def test_daemon_runs_market_sync_without_allowlist_in_full_market_mode(monkeypatch):
     settings = AppSettings(signal_interval_seconds=17, symbol_allowlist="")
     calls: list[str] = []
     engine = object()
@@ -60,7 +60,8 @@ def test_daemon_skips_market_sync_without_allowlist(monkeypatch):
     monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: engine)
     monkeypatch.setattr(
         "altcoin_trend.daemon.sync_market_inputs",
-        lambda *, engine, settings, now: calls.append("sync"),
+        lambda *, engine, settings, now, instrument_cache: calls.append("sync")
+        or SimpleNamespace(status="healthy", message="full-market"),
     )
     monkeypatch.setattr(
         "altcoin_trend.daemon.run_once_pipeline",
@@ -80,7 +81,7 @@ def test_daemon_skips_market_sync_without_allowlist(monkeypatch):
     with pytest.raises(StopLoop):
         daemon.main()
 
-    assert calls == ["pipeline"]
+    assert calls == ["sync", "pipeline"]
 
 
 def test_daemon_reduces_httpx_request_log_noise(monkeypatch):

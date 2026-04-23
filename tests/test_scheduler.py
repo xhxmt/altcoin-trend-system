@@ -664,6 +664,24 @@ def test_process_alerts_loads_recent_events_for_largest_v2_cooldown(
     assert captured["since"] == now - timedelta(seconds=expected_lookback_seconds)
 
 
+def test_process_alerts_uses_normalized_recent_since_when_provided(monkeypatch):
+    captured = {}
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    recent_since = datetime(2025, 12, 31, 23, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("altcoin_trend.scheduler.load_rank_rows", lambda engine, rank_scope, limit: [])
+
+    def fake_load_recent_alert_events(engine, since):
+        captured["since"] = since
+        return []
+
+    monkeypatch.setattr("altcoin_trend.scheduler._load_recent_alert_events", fake_load_recent_alert_events)
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", lambda engine, table_name, rows: len(rows))
+
+    process_alerts(object(), now=now, cooldown_seconds=3600, recent_since=recent_since)
+
+    assert captured["since"] == recent_since
+
+
 def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():
     snapshot_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
     rows = []

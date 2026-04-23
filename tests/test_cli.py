@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from typer.testing import CliRunner
 
@@ -308,17 +308,68 @@ def test_cli_health_prints_health_report(monkeypatch):
 
 
 def test_cli_alerts_processes_pending_alerts(monkeypatch):
+    captured = {}
+    now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(alert_cooldown_seconds=3600))
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
-    monkeypatch.setattr(
-        "altcoin_trend.cli.process_alerts",
-        lambda engine, now, cooldown_seconds, telegram_client: (2, 0),
-    )
+    monkeypatch.setattr("altcoin_trend.cli._utc_now", lambda: now)
+
+    def fake_process_alerts(engine, now, cooldown_seconds, telegram_client, recent_since):
+        captured["now"] = now
+        captured["recent_since"] = recent_since
+        return 2, 0
+
+    monkeypatch.setattr("altcoin_trend.cli.process_alerts", fake_process_alerts)
 
     result = CliRunner().invoke(app, ["alerts", "--since", "1h"])
 
     assert result.exit_code == 0
-    assert "Alerts processed inserted=2 sent=0 since=1h" in result.output
+    assert captured["now"] == now
+    assert captured["recent_since"] == datetime(2026, 4, 23, 11, 0, tzinfo=timezone.utc)
+    assert "Alerts processed inserted=2 sent=0 since=2026-04-23T11:00:00+00:00" in result.output
+
+
+def test_cli_alerts_normalizes_supported_since_values(monkeypatch):
+    captured = []
+    now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(alert_cooldown_seconds=3600))
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr("altcoin_trend.cli._utc_now", lambda: now)
+
+    def fake_process_alerts(engine, now, cooldown_seconds, telegram_client, recent_since):
+        captured.append(recent_since)
+        return 0, 0
+
+    monkeypatch.setattr("altcoin_trend.cli.process_alerts", fake_process_alerts)
+
+    cases = [
+        ("30m", now - timedelta(minutes=30)),
+        ("1h", now - timedelta(hours=1)),
+        ("7d", now - timedelta(days=7)),
+        ("2026-04-23T08:00:00Z", datetime(2026, 4, 23, 8, 0, tzinfo=timezone.utc)),
+        ("2026-04-23T08:00:00", datetime(2026, 4, 23, 8, 0, tzinfo=timezone.utc)),
+    ]
+    for value, expected in cases:
+        result = CliRunner().invoke(app, ["alerts", "--since", value])
+        assert result.exit_code == 0
+        assert captured[-1] == expected
+
+
+def test_cli_alerts_rejects_invalid_or_future_since(monkeypatch):
+    now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings(alert_cooldown_seconds=3600))
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+    monkeypatch.setattr("altcoin_trend.cli._utc_now", lambda: now)
+    monkeypatch.setattr("altcoin_trend.cli.process_alerts", lambda **kwargs: (0, 0))
+
+    invalid = CliRunner().invoke(app, ["alerts", "--since", "not-a-window"])
+    assert invalid.exit_code != 0
+    assert "--since must be a relative duration" in invalid.output
+    assert "ISO datetime" in invalid.output
+
+    future = CliRunner().invoke(app, ["alerts", "--since", "2026-04-23T12:01:00Z"])
+    assert future.exit_code != 0
+    assert "must not be in the future" in future.output
 
 
 def test_cli_bootstrap_derivatives_uses_loaded_settings(monkeypatch):

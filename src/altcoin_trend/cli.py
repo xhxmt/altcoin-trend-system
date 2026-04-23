@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import typer
 
@@ -48,6 +48,42 @@ def _parse_iso_datetime(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_alert_since(value: str, now: datetime) -> datetime:
+    token = value.strip()
+    if not token:
+        raise typer.BadParameter("--since must not be empty")
+
+    unit = token[-1].lower()
+    magnitude_text = token[:-1]
+    if unit in {"m", "h", "d"} and magnitude_text.isdigit():
+        magnitude = int(magnitude_text)
+        if magnitude <= 0:
+            raise typer.BadParameter("--since relative duration must be greater than zero")
+        delta = {
+            "m": timedelta(minutes=magnitude),
+            "h": timedelta(hours=magnitude),
+            "d": timedelta(days=magnitude),
+        }[unit]
+        return now - delta
+
+    try:
+        parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "--since must be a relative duration like 30m, 1h, 7d, or an ISO datetime"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    since = parsed.astimezone(timezone.utc)
+    if since > now:
+        raise typer.BadParameter("--since must not be in the future")
+    return since
 
 
 def _format_counts(counts: dict[str, int]) -> str:
@@ -180,6 +216,8 @@ def health() -> None:
 def alerts(since: str = typer.Option("24h", "--since")) -> None:
     settings = load_settings()
     engine = build_engine(settings)
+    now = _utc_now()
+    recent_since = _parse_alert_since(since, now)
     telegram_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         telegram_client = TelegramClient(
@@ -188,11 +226,12 @@ def alerts(since: str = typer.Option("24h", "--since")) -> None:
         )
     inserted, sent = process_alerts(
         engine=engine,
-        now=datetime.now(timezone.utc),
+        now=now,
         cooldown_seconds=settings.alert_cooldown_seconds,
         telegram_client=telegram_client,
+        recent_since=recent_since,
     )
-    typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={since}")
+    typer.echo(f"Alerts processed inserted={inserted} sent={sent} since={recent_since.isoformat()}")
 
 
 @app.command("trade-candidates")

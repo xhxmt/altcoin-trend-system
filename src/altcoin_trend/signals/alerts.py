@@ -31,6 +31,35 @@ def _display_exchange(row: Mapping[str, Any] | Any) -> str:
     return str(value) if value else "unknown"
 
 
+def _display_long_signal_strength(row: Mapping[str, Any] | Any) -> str:
+    value = _get(row, "actionability_score", None)
+    if value is None:
+        value = _get(row, "final_score", None)
+    return "n/a" if value is None else str(value)
+
+
+def _display_alert_type(alert_type: str) -> str:
+    labels = {
+        "strong_trend": "强趋势",
+        "watchlist_enter": "进入观察",
+        "breakout_confirmed": "突破确认",
+        "risk_downgrade": "风险降级",
+        "explosive_move_early": "早期爆发",
+        "continuation_confirmed": "趋势延续确认",
+        "ignition_detected": "点火信号",
+        "ignition_extreme": "极端点火",
+        "exhaustion_risk": "过热风险",
+    }
+    return labels.get(alert_type, alert_type or "未知信号")
+
+
+def _build_long_signal_message(row: Mapping[str, Any] | Any, alert_type: str) -> str:
+    symbol = str(_get(row, "symbol", "unknown"))
+    strength = _display_long_signal_strength(row)
+    signal = _display_alert_type(alert_type)
+    return f"币种：{symbol}\n信号：{signal}\n做多信号强度：{strength}/100"
+
+
 def _normalize_items(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -124,74 +153,12 @@ class AlertCooldown:
         self._last_sent[(exchange, symbol, alert_type)] = current_time
 
 
-def build_strong_alert_message(row: Mapping[str, Any] | Any) -> str:
-    exchange = str(_get(row, "exchange", "unknown"))
-    symbol = str(_get(row, "symbol", "unknown"))
-    display_exchange = exchange.title()
-    final_score = _get(row, "final_score", 0.0)
-
-    reasons = _normalize_items(_get(row, "reasons", None))
-    if not reasons:
-        reasons = _normalize_items(_get(row, "primary_reason", None))
-
-    risks = _normalize_items(_get(row, "risks", None))
-    if not risks:
-        risks = _normalize_items(_get(row, "veto_reason_codes", None))
-
-    def _display_score(key: str) -> Any:
-        value = _get(row, key, None)
-        return "n/a" if value is None else value
-
-    lines = [
-        f"[STRONG] {symbol} {display_exchange}",
-        f"Final score: {final_score}",
-        "Score breakdown:",
-        f"Trend: {_display_score('trend_score')}",
-        f"Volume breakout: {_display_score('volume_breakout_score')}",
-        f"Relative strength: {_display_score('relative_strength_score')}",
-        f"Derivatives: {_display_score('derivatives_score')}",
-        f"Quality: {_display_score('quality_score')}",
-    ]
-    for label, key in (
-        ("OI delta 1h", "oi_delta_1h"),
-        ("OI delta 4h", "oi_delta_4h"),
-        ("Funding z-score", "funding_zscore"),
-        ("Taker buy/sell ratio", "taker_buy_sell_ratio"),
-    ):
-        value = _get(row, key, None)
-        if value is not None:
-            lines.append(f"{label}: {value}")
-    lines.extend(
-        [
-            f"Reasons: {', '.join(reasons) if reasons else 'none'}",
-            f"Risks: {', '.join(risks) if risks else 'none'}",
-        ]
-    )
-    return "\n".join(lines)
+def build_strong_alert_message(row: Mapping[str, Any] | Any, alert_type: str = "strong_trend") -> str:
+    return _build_long_signal_message(row, alert_type)
 
 
 def build_explosive_move_early_alert_message(row: Mapping[str, Any] | Any) -> str:
-    exchange = str(_get(row, "exchange", "unknown"))
-    symbol = str(_get(row, "symbol", "unknown"))
-    display_exchange = exchange.title()
-
-    def _display_value(key: str) -> Any:
-        value = _get(row, key, None)
-        return "n/a" if value is None else value
-
-    lines = [
-        f"[EXPLOSIVE_MOVE_EARLY] {symbol} {display_exchange}",
-        f"Final score: {_display_value('final_score')}",
-        f"Tier: {_display_value('tier')}",
-        "Move context:",
-        f"Return 1h: {_display_value('return_1h_pct')}",
-        f"Return 4h: {_display_value('return_4h_pct')}",
-        f"Return 24h percentile: {_display_value('return_24h_percentile')}",
-        f"Relative strength: {_display_value('relative_strength_score')}",
-        f"Volume breakout: {_display_value('volume_breakout_score')}",
-        f"Quality: {_display_value('quality_score')}",
-    ]
-    return "\n".join(lines)
+    return _build_long_signal_message(row, "explosive_move_early")
 
 
 def _alert_priority_for_type(alert_type: str, row: Mapping[str, Any] | Any | None = None) -> str:
@@ -280,36 +247,7 @@ def build_signal_v2_alert_message(
     alert_type: str,
     per_exchange_signals: Mapping[str, str] | None = None,
 ) -> str:
-    symbol = str(_get(row, "symbol", "unknown"))
-    continuation_grade = _get(row, "continuation_grade", None)
-    ignition_grade = _get(row, "ignition_grade", None)
-    if alert_type == "ignition_extreme":
-        header = f"[IGNITION_EXTREME] {symbol}"
-    elif alert_type == "ignition_detected":
-        header = f"[IGNITION_{ignition_grade}] {symbol}"
-    elif alert_type == "continuation_confirmed":
-        header = f"[CONTINUATION_{continuation_grade}] {symbol}"
-    else:
-        header = f"[EXHAUSTION_RISK] {symbol}"
-
-    def display(key: str) -> Any:
-        value = _get(row, key, None)
-        return "n/a" if value is None else value
-
-    risks = _normalize_items(_get(row, "risk_flags", None))
-    lines = [
-        header,
-        f"1h {display('return_1h_pct')} | 24h {display('return_24h_pct')}",
-        f"RS {display('relative_strength_score')} | Vol impulse {display('volume_impulse_score')} | Deriv {display('derivatives_score')}",
-        f"Cross-exchange: {'yes' if bool(_get(row, 'cross_exchange_confirmed', False)) else 'no'}",
-        f"Chase risk: {display('chase_risk_score')}",
-        f"Actionability: {display('actionability_score')}",
-    ]
-    if per_exchange_signals:
-        signal_parts = [f"{exchange}={label}" for exchange, label in per_exchange_signals.items()]
-        lines.append(f"Signals: {' | '.join(signal_parts)}")
-    lines.append(f"Risks: {', '.join(risks) if risks else 'none'}")
-    return "\n".join(lines)
+    return _build_long_signal_message(row, alert_type)
 
 
 def _recent_event_key(event: Mapping[str, Any]) -> tuple[int, str]:
@@ -477,7 +415,7 @@ def build_alert_event_rows(
         if recent_event is not None and _event_recent_enough(recent_event, current_time, cooldown_seconds):
             continue
 
-        message = build_strong_alert_message(row)
+        message = build_strong_alert_message(row, decision.alert_type)
         payload = {
             "exchange": _display_exchange(row),
             "current_tier": current_tier,

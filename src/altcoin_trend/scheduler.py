@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,7 +12,10 @@ from sqlalchemy import Engine, text
 from altcoin_trend.db import insert_rows
 from altcoin_trend.features.derivatives import compute_derivatives_features
 from altcoin_trend.features.indicators import add_ema, adx, atr
-from altcoin_trend.features.relative_strength import RelativeStrengthFeature, build_relative_strength_features
+from altcoin_trend.features.relative_strength import (
+    RelativeStrengthFeature,
+    build_relative_strength_features_from_returns,
+)
 from altcoin_trend.features.resample import resample_market_1m
 from altcoin_trend.features.scoring import ScoreInput, compute_final_score, max_tier
 from altcoin_trend.signals.alerts import MAX_SIGNAL_V2_COOLDOWN_SECONDS, build_alert_event_rows
@@ -256,68 +259,69 @@ def _apply_signal_v2_result(row: dict[str, Any]) -> None:
     row["trade_candidate"] = result.continuation_grade is not None
 
 
-def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _asset_groups_from_market_rows(market_rows: pd.DataFrame) -> Iterable[pd.DataFrame]:
     if market_rows.empty:
-        return [], []
+        return
 
     working = market_rows.copy()
     working["ts"] = pd.to_datetime(working["ts"], utc=True)
-    relative_strength_by_asset = build_relative_strength_features(working)
-    feature_rows: list[dict[str, Any]] = []
+    for _, group in working.sort_values(["asset_id", "ts"]).groupby("asset_id"):
+        yield group
 
-    for asset_id, group in working.sort_values(["asset_id", "ts"]).groupby("asset_id"):
+
+def build_snapshot_rows_from_groups(
+    asset_groups: Iterable[pd.DataFrame],
+    snapshot_ts: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    partial_rows: list[dict[str, Any]] = []
+    relative_strength_inputs: list[dict[str, Any]] = []
+
+    for group in asset_groups:
+        if group.empty:
+            continue
+
+        group = group.copy()
+        group["ts"] = pd.to_datetime(group["ts"], utc=True)
+        group = group.sort_values("ts")
         group = add_ema(group, column="close", span=20, output="ema20_1m")
         latest = group.iloc[-1]
         timeframe_features = _higher_timeframe_features(group)
         snapshot_timeframe_features = {
             key: value for key, value in timeframe_features.items() if key not in {"return_7d", "return_30d"}
         }
-        relative_strength = relative_strength_by_asset.get(
-            int(asset_id),
-            RelativeStrengthFeature(
-                return_7d=None,
-                return_30d=None,
-                rs_btc_7d=None,
-                rs_eth_7d=None,
-                rs_btc_30d=None,
-                rs_eth_30d=None,
-                relative_strength_score=50.0,
-            ),
-        )
         derivatives = compute_derivatives_features(group)
         scores = _component_scores(
             group,
             timeframe_features,
-            relative_strength.relative_strength_score,
-            derivatives.derivatives_score,
+            relative_strength_score=50.0,
+            derivatives_score=derivatives.derivatives_score,
         )
-        score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
-        feature_rows.append(
+        asset_id = int(latest["asset_id"])
+        relative_strength_inputs.append(
             {
+                "asset_id": asset_id,
+                "exchange": str(latest["exchange"]),
+                "symbol": str(latest["symbol"]).upper(),
+                "return_7d": timeframe_features.get("return_7d"),
+                "return_30d": timeframe_features.get("return_30d"),
+            }
+        )
+        partial_rows.append(
+            {
+                "_scores": scores,
                 "ts": snapshot_ts,
-                "asset_id": int(asset_id),
+                "asset_id": asset_id,
                 "exchange": latest["exchange"],
                 "symbol": latest["symbol"],
                 "base_asset": latest["base_asset"],
                 "close": float(latest["close"]),
                 "ema20_1m": float(latest["ema20_1m"]),
                 **snapshot_timeframe_features,
-                "rs_btc_7d": relative_strength.rs_btc_7d,
-                "rs_eth_7d": relative_strength.rs_eth_7d,
-                "rs_btc_30d": relative_strength.rs_btc_30d,
-                "rs_eth_30d": relative_strength.rs_eth_30d,
                 "oi_delta_1h": derivatives.oi_delta_1h,
                 "oi_delta_4h": derivatives.oi_delta_4h,
                 "funding_zscore": derivatives.funding_zscore,
                 "taker_buy_sell_ratio": derivatives.taker_buy_sell_ratio,
-                "trend_score": scores["trend_score"],
-                "volume_breakout_score": scores["volume_breakout_score"],
-                "relative_strength_score": scores["relative_strength_score"],
-                "derivatives_score": scores["derivatives_score"],
-                "quality_score": scores["quality_score"],
-                "final_score": score_result.final_score,
-                "tier": score_result.tier,
-                "primary_reason": score_result.primary_reason,
+                "veto_reason_codes": [],
                 "volume_impulse_score": 0.0,
                 "return_24h_rank": None,
                 "return_7d_rank": None,
@@ -331,6 +335,47 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
                 "continuation_candidate": False,
                 "ignition_candidate": False,
                 "trade_candidate": False,
+            }
+        )
+
+    if not partial_rows:
+        return [], []
+
+    relative_strength_by_asset = build_relative_strength_features_from_returns(relative_strength_inputs)
+    feature_rows: list[dict[str, Any]] = []
+
+    for partial_row in partial_rows:
+        asset_id = int(partial_row["asset_id"])
+        relative_strength = relative_strength_by_asset.get(
+            asset_id,
+            RelativeStrengthFeature(
+                return_7d=None,
+                return_30d=None,
+                rs_btc_7d=None,
+                rs_eth_7d=None,
+                rs_btc_30d=None,
+                rs_eth_30d=None,
+                relative_strength_score=50.0,
+            ),
+        )
+        scores = dict(partial_row.pop("_scores"))
+        scores["relative_strength_score"] = relative_strength.relative_strength_score
+        score_result = compute_final_score(ScoreInput(veto_reason_codes=[], **scores))
+        feature_rows.append(
+            {
+                **partial_row,
+                "rs_btc_7d": relative_strength.rs_btc_7d,
+                "rs_eth_7d": relative_strength.rs_eth_7d,
+                "rs_btc_30d": relative_strength.rs_btc_30d,
+                "rs_eth_30d": relative_strength.rs_eth_30d,
+                "trend_score": scores["trend_score"],
+                "volume_breakout_score": scores["volume_breakout_score"],
+                "relative_strength_score": scores["relative_strength_score"],
+                "derivatives_score": scores["derivatives_score"],
+                "quality_score": scores["quality_score"],
+                "final_score": score_result.final_score,
+                "tier": score_result.tier,
+                "primary_reason": score_result.primary_reason,
             }
         )
 
@@ -359,6 +404,10 @@ def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tup
     for exchange, rows in pd.DataFrame(feature_rows).groupby("exchange"):
         rank_rows.extend(_rank_rows_for_scope(rows.to_dict("records"), str(exchange)))
     return feature_rows, rank_rows
+
+
+def build_snapshot_rows(market_rows: pd.DataFrame, snapshot_ts: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return build_snapshot_rows_from_groups(_asset_groups_from_market_rows(market_rows), snapshot_ts)
 
 
 def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
@@ -430,10 +479,71 @@ def _load_market_rows(engine: Engine, lookback_days: int = 31) -> pd.DataFrame:
         return pd.DataFrame(result.mappings().all())
 
 
-def write_run_once_snapshots(engine: Engine, snapshot_ts: datetime | None = None) -> tuple[int, int]:
+def _iter_market_row_groups(
+    engine: Engine,
+    lookback_days: int = 31,
+    end_ts: datetime | None = None,
+) -> Iterable[pd.DataFrame]:
+    end_ts = end_ts or _utc_now()
+    cutoff_ts = end_ts - timedelta(days=lookback_days)
+    statement = text(
+        """
+        SELECT
+            m.asset_id,
+            m.exchange,
+            m.symbol,
+            a.base_asset,
+            m.ts,
+            m.open,
+            m.high,
+            m.low,
+            m.close,
+            m.volume,
+            m.quote_volume,
+            m.trade_count,
+            m.taker_buy_base,
+            m.taker_buy_quote,
+            m.open_interest,
+            m.funding_rate,
+            m.long_short_ratio,
+            m.buy_sell_ratio
+        FROM alt_core.asset_master AS a
+        JOIN LATERAL (
+            SELECT *
+            FROM alt_core.market_1m AS m
+            WHERE m.asset_id = a.asset_id
+              AND m.ts >= :cutoff_ts
+              AND m.ts <= :end_ts
+            ORDER BY m.ts
+        ) AS m ON TRUE
+        ORDER BY m.asset_id, m.ts
+        """
+    )
+    current_asset_id: int | None = None
+    current_rows: list[dict[str, Any]] = []
+    with engine.connect() as connection:
+        result = connection.execution_options(stream_results=True).execute(
+            statement,
+            {"cutoff_ts": cutoff_ts, "end_ts": end_ts},
+        )
+        for row in result.mappings():
+            asset_id = int(row["asset_id"])
+            if current_asset_id is not None and asset_id != current_asset_id:
+                yield pd.DataFrame(current_rows)
+                current_rows = []
+            current_asset_id = asset_id
+            current_rows.append(dict(row))
+
+    if current_rows:
+        yield pd.DataFrame(current_rows)
+
+
+def write_run_once_snapshots(engine: Engine, snapshot_ts: datetime | None = None, lookback_days: int = 31) -> tuple[int, int]:
     snapshot_ts = snapshot_ts or _utc_now()
-    market_rows = _load_market_rows(engine)
-    feature_rows, rank_rows = build_snapshot_rows(market_rows, snapshot_ts)
+    feature_rows, rank_rows = build_snapshot_rows_from_groups(
+        _iter_market_row_groups(engine, lookback_days=lookback_days, end_ts=snapshot_ts),
+        snapshot_ts,
+    )
     if not feature_rows:
         return 0, 0
 

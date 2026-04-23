@@ -496,7 +496,10 @@ def test_write_run_once_snapshots_preserves_rank_payload(monkeypatch):
     )
     inserted = []
 
-    monkeypatch.setattr("altcoin_trend.scheduler._load_market_rows", lambda engine: market_rows)
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler._iter_market_row_groups",
+        lambda engine, lookback_days=31, end_ts=None: iter([market_rows]),
+    )
 
     def fake_insert_rows(engine, table_name, rows):
         inserted.append((table_name, list(rows)))
@@ -528,6 +531,70 @@ def test_write_run_once_snapshots_preserves_rank_payload(monkeypatch):
     }
     assert {key: payload[key] for key in expected_payload_fields} == expected_payload_fields
     assert payload["actionability_score"] >= 0.0
+
+
+def test_write_run_once_snapshots_uses_streamed_market_groups(monkeypatch):
+    groups = [
+        pd.DataFrame(
+            [
+                {
+                    "asset_id": 1,
+                    "exchange": "binance",
+                    "symbol": "SOLUSDT",
+                    "base_asset": "SOL",
+                    "ts": "2026-01-01T00:00:00Z",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.0,
+                    "volume": 10.0,
+                    "quote_volume": 1000.0,
+                },
+                {
+                    "asset_id": 1,
+                    "exchange": "binance",
+                    "symbol": "SOLUSDT",
+                    "base_asset": "SOL",
+                    "ts": "2026-01-01T00:01:00Z",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 100.0,
+                    "close": 102.0,
+                    "volume": 20.0,
+                    "quote_volume": 3000.0,
+                },
+            ]
+        )
+    ]
+    inserted = []
+
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler._iter_market_row_groups",
+        lambda engine, lookback_days=31, end_ts=None: iter(groups),
+        raising=False,
+    )
+
+    def fail_load_market_rows(engine):
+        raise AssertionError("write_run_once_snapshots should not load all market rows at once")
+
+    monkeypatch.setattr("altcoin_trend.scheduler._load_market_rows", fail_load_market_rows)
+
+    def fake_insert_rows(engine, table_name, rows):
+        inserted.append((table_name, list(rows)))
+        return len(inserted[-1][1])
+
+    monkeypatch.setattr("altcoin_trend.scheduler.insert_rows", fake_insert_rows)
+
+    from altcoin_trend.scheduler import write_run_once_snapshots
+
+    features_written, ranks_written = write_run_once_snapshots(
+        object(),
+        snapshot_ts=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert features_written == 1
+    assert ranks_written >= 1
+    assert next(rows for table_name, rows in inserted if table_name == "alt_signal.feature_snapshot")
 
 
 def test_process_alerts_converts_payload_to_jsonb_before_insert(monkeypatch):
@@ -946,4 +1013,4 @@ def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
     assert sent_count == 1
     assert inserted[0][0] == "alt_signal.alert_events"
     assert inserted[0][1][0]["delivery_status"] == "sent"
-    assert "[STRONG] SOLUSDT Binance" in telegram.messages[0]
+    assert telegram.messages[0] == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：88.4/100"

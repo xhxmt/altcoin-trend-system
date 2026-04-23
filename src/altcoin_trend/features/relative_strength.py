@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import pandas as pd
@@ -25,6 +26,11 @@ def _clean_float(value: Any) -> float | None:
     if value is None or pd.isna(value):
         return None
     return float(value)
+
+
+def _clean_return(value: Any) -> float | None:
+    cleaned = _clean_float(value)
+    return None if cleaned is None else round(cleaned, 6)
 
 
 def _return_pct(group: pd.DataFrame, days: int) -> float | None:
@@ -89,40 +95,31 @@ def _benchmark_score(
     return rs_btc_7d, rs_eth_7d, rs_btc_30d, rs_eth_30d, _score_from_edges(edges)
 
 
-def build_relative_strength_features(frame: pd.DataFrame) -> dict[int, RelativeStrengthFeature]:
-    if frame.empty:
+def build_relative_strength_features_from_returns(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[int, RelativeStrengthFeature]:
+    returns = pd.DataFrame(list(rows))
+    if returns.empty:
         return {}
 
-    working = frame.copy()
-    working["ts"] = pd.to_datetime(working["ts"], utc=True)
-    returns: dict[int, dict[str, Any]] = {}
-    for asset_id, group in working.groupby("asset_id"):
-        latest = group.sort_values("ts").iloc[-1]
-        returns[int(asset_id)] = {
-            "exchange": str(latest["exchange"]),
-            "symbol": str(latest["symbol"]).upper(),
-            "return_7d": _return_pct(group, 7),
-            "return_30d": _return_pct(group, 30),
-        }
-
     result: dict[int, RelativeStrengthFeature] = {}
-    for _, exchange_rows in pd.DataFrame.from_dict(returns, orient="index").groupby("exchange"):
+    for _, exchange_rows in returns.groupby("exchange"):
         benchmark_by_symbol = {str(row["symbol"]): row for row in exchange_rows.to_dict("records")}
         btc = benchmark_by_symbol.get("BTCUSDT", {})
         eth = benchmark_by_symbol.get("ETHUSDT", {})
-        btc_7d = _clean_float(btc.get("return_7d")) if btc else None
-        eth_7d = _clean_float(eth.get("return_7d")) if eth else None
-        btc_30d = _clean_float(btc.get("return_30d")) if btc else None
-        eth_30d = _clean_float(eth.get("return_30d")) if eth else None
+        btc_7d = _clean_return(btc.get("return_7d")) if btc else None
+        eth_7d = _clean_return(eth.get("return_7d")) if eth else None
+        btc_30d = _clean_return(btc.get("return_30d")) if btc else None
+        eth_30d = _clean_return(eth.get("return_30d")) if eth else None
         median_7d = exchange_rows["return_7d"].dropna().median()
         median_30d = exchange_rows["return_30d"].dropna().median()
         median_7d_value = float(median_7d) if pd.notna(median_7d) else None
         median_30d_value = float(median_30d) if pd.notna(median_30d) else None
 
-        for raw_asset_id, row in exchange_rows.iterrows():
-            asset_id = int(raw_asset_id)
-            return_7d = _clean_float(row["return_7d"])
-            return_30d = _clean_float(row["return_30d"])
+        for _, row in exchange_rows.iterrows():
+            asset_id = int(row["asset_id"])
+            return_7d = _clean_return(row["return_7d"])
+            return_30d = _clean_return(row["return_30d"])
             if any(value is not None for value in (btc_7d, eth_7d, btc_30d, eth_30d)):
                 rs_btc_7d, rs_eth_7d, rs_btc_30d, rs_eth_30d, score = _benchmark_score(
                     return_7d,
@@ -147,3 +144,25 @@ def build_relative_strength_features(frame: pd.DataFrame) -> dict[int, RelativeS
             )
 
     return result
+
+
+def build_relative_strength_features(frame: pd.DataFrame) -> dict[int, RelativeStrengthFeature]:
+    if frame.empty:
+        return {}
+
+    working = frame.copy()
+    working["ts"] = pd.to_datetime(working["ts"], utc=True)
+    returns: list[dict[str, Any]] = []
+    for asset_id, group in working.groupby("asset_id"):
+        latest = group.sort_values("ts").iloc[-1]
+        returns.append(
+            {
+                "asset_id": int(asset_id),
+                "exchange": str(latest["exchange"]),
+                "symbol": str(latest["symbol"]).upper(),
+                "return_7d": _return_pct(group, 7),
+                "return_30d": _return_pct(group, 30),
+            }
+        )
+
+    return build_relative_strength_features_from_returns(returns)

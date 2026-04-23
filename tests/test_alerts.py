@@ -7,6 +7,7 @@ import pytest
 from altcoin_trend.signals.alerts import (
     AlertCooldown,
     build_alert_event_rows,
+    build_signal_v2_alert_message,
     build_strong_alert_message,
     is_high_value_signal,
 )
@@ -56,7 +57,7 @@ def test_alert_cooldown_rejects_naive_datetimes_for_should_send_and_record_sent(
         cooldown.record_sent("binance", "SOLUSDT", "strong_trend", now=naive_now)
 
 
-def test_build_strong_alert_message_includes_header_reasons_and_risks():
+def test_build_strong_alert_message_shows_symbol_and_long_signal_strength():
     text = build_strong_alert_message(
         {
             "exchange": "binance",
@@ -72,14 +73,12 @@ def test_build_strong_alert_message_includes_header_reasons_and_risks():
         }
     )
 
-    assert "[STRONG] SOLUSDT Binance" in text
-    assert "Reasons:" in text
-    assert "Risks:" in text
-    assert "breakout confirmed" in text
-    assert "funding heat" in text
+    assert text == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：91.25/100"
+    assert "Reasons:" not in text
+    assert "[STRONG]" not in text
 
 
-def test_build_strong_alert_message_strips_blank_items_to_none():
+def test_build_strong_alert_message_ignores_legacy_reason_fields():
     text = build_strong_alert_message(
         {
             "exchange": "binance",
@@ -95,11 +94,12 @@ def test_build_strong_alert_message_strips_blank_items_to_none():
         }
     )
 
-    assert "Reasons: breakout confirmed" in text
-    assert "Risks: none" in text
+    assert text == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：91.25/100"
+    assert "breakout confirmed" not in text
+    assert "Risks:" not in text
 
 
-def test_build_strong_alert_message_shows_na_for_missing_core_scores():
+def test_build_strong_alert_message_falls_back_to_final_score_when_actionability_is_missing():
     text = build_strong_alert_message(
         {
             "exchange": "binance",
@@ -113,20 +113,17 @@ def test_build_strong_alert_message_shows_na_for_missing_core_scores():
         }
     )
 
-    assert "Trend: n/a" in text
-    assert "Volume breakout: n/a" in text
-    assert "Relative strength: n/a" in text
-    assert "Derivatives: n/a" in text
-    assert "Quality: n/a" in text
-    assert "Trend: None" not in text
+    assert text == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：91.25/100"
+    assert "Trend:" not in text
 
 
-def test_build_strong_alert_message_includes_derivatives_context_when_available():
+def test_build_strong_alert_message_uses_actionability_score_when_available():
     text = build_strong_alert_message(
         {
             "exchange": "binance",
             "symbol": "SOLUSDT",
             "final_score": 91.25,
+            "actionability_score": 72.0,
             "trend_score": 95.0,
             "volume_breakout_score": 90.0,
             "relative_strength_score": 88.0,
@@ -139,10 +136,24 @@ def test_build_strong_alert_message_includes_derivatives_context_when_available(
         }
     )
 
-    assert "OI delta 1h: 12.5" in text
-    assert "OI delta 4h: -4.0" in text
-    assert "Funding z-score: 1.8" in text
-    assert "Taker buy/sell ratio: 1.23" in text
+    assert text == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：72.0/100"
+    assert "OI delta" not in text
+
+
+def test_build_signal_v2_alert_message_shows_symbol_and_actionability_strength():
+    text = build_signal_v2_alert_message(
+        {
+            "symbol": "HOTUSDT",
+            "final_score": 71.0,
+            "actionability_score": 38.0,
+            "return_1h_pct": 10.0,
+            "risk_flags": ["CHASE_RISK"],
+        },
+        "exhaustion_risk",
+    )
+
+    assert text == "币种：HOTUSDT\n信号：过热风险\n做多信号强度：38.0/100"
+    assert "[EXHAUSTION_RISK]" not in text
 
 
 @pytest.mark.parametrize(
@@ -329,7 +340,7 @@ def test_build_alert_event_rows_creates_strong_alert_and_suppresses_recent_dupli
     assert first_events[0]["alert_type"] == "strong_trend"
     assert first_events[0]["delivery_status"] == "pending"
     assert first_events[0]["payload"]["current_tier"] == "strong"
-    assert "[STRONG] SOLUSDT Binance" in first_events[0]["message"]
+    assert first_events[0]["message"] == "币种：SOLUSDT\n信号：强趋势\n做多信号强度：88.4/100"
 
     duplicate_events = build_alert_event_rows(
         rank_rows,
@@ -366,7 +377,7 @@ def test_build_alert_event_rows_creates_explosive_move_early_alert_independent_o
 
     assert len(events) == 1
     assert events[0]["alert_type"] == "explosive_move_early"
-    assert "[EXPLOSIVE_MOVE_EARLY] RAVEUSDT Binance" in events[0]["message"]
+    assert events[0]["message"] == "币种：RAVEUSDT\n信号：早期爆发\n做多信号强度：63.0/100"
     assert events[0]["payload"]["current_tier"] == "monitor"
 
     duplicate_events = build_alert_event_rows(
@@ -408,7 +419,7 @@ def test_build_alert_event_rows_creates_ignition_extreme_event():
     events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
 
     assert events[0]["alert_type"] == "ignition_extreme"
-    assert "[IGNITION_EXTREME] RAVEUSDT" in events[0]["message"]
+    assert events[0]["message"] == "币种：RAVEUSDT\n信号：极端点火\n做多信号强度：55.0/100"
     assert events[0]["payload"]["priority"] == "P1"
     assert events[0]["payload"]["continuation_grade"] is None
     assert events[0]["payload"]["ignition_grade"] == "EXTREME"
@@ -416,7 +427,6 @@ def test_build_alert_event_rows_creates_ignition_extreme_event():
     assert events[0]["payload"]["per_exchange_signals"] == {"binance": "IGNITION_EXTREME"}
     assert events[0]["payload"]["asset_ids"] == [21]
     assert events[0]["payload"]["exchanges"] == ["binance"]
-    assert "binance=IGNITION_EXTREME" in events[0]["message"]
 
 
 def test_build_alert_event_rows_dedupes_cross_exchange_ignition_by_symbol():
@@ -459,8 +469,7 @@ def test_build_alert_event_rows_dedupes_cross_exchange_ignition_by_symbol():
     }
     assert event["payload"]["asset_ids"] == [101, 202]
     assert event["payload"]["exchanges"] == ["binance", "bybit"]
-    assert "binance=IGNITION_EXTREME" in event["message"]
-    assert "bybit=IGNITION_EXTREME" in event["message"]
+    assert event["message"] == "币种：RAVEUSDT\n信号：极端点火\n做多信号强度：65.0/100"
 
 
 def test_build_alert_event_rows_suppresses_v2_duplicate_by_symbol_family_when_best_exchange_changes():
@@ -670,7 +679,7 @@ def test_build_alert_event_rows_creates_continuation_confirmed_event_with_priori
 
     assert len(events) == 1
     assert events[0]["alert_type"] == "continuation_confirmed"
-    assert f"[CONTINUATION_{grade}] SOLUSDT" in events[0]["message"]
+    assert events[0]["message"] == "币种：SOLUSDT\n信号：趋势延续确认\n做多信号强度：89.0/100"
     assert events[0]["payload"]["priority"] == priority
     assert events[0]["payload"]["continuation_grade"] == grade
     assert events[0]["payload"]["ignition_grade"] is None
@@ -708,7 +717,7 @@ def test_build_alert_event_rows_creates_ignition_detected_event_with_priority(gr
 
     assert len(events) == 1
     assert events[0]["alert_type"] == "ignition_detected"
-    assert f"[IGNITION_{grade}] RAYUSDT" in events[0]["message"]
+    assert events[0]["message"] == "币种：RAYUSDT\n信号：点火信号\n做多信号强度：72.0/100"
     assert events[0]["payload"]["priority"] == priority
 
 
@@ -742,7 +751,7 @@ def test_build_alert_event_rows_creates_exhaustion_risk_without_grade_when_chase
 
     assert len(events) == 1
     assert events[0]["alert_type"] == "exhaustion_risk"
-    assert "[EXHAUSTION_RISK] HOTUSDT" in events[0]["message"]
+    assert events[0]["message"] == "币种：HOTUSDT\n信号：过热风险\n做多信号强度：38.0/100"
     assert events[0]["payload"]["priority"] == "P2"
 
 
@@ -837,7 +846,7 @@ def test_build_alert_event_rows_keeps_legacy_alert_for_strong_row_without_v2_gra
 
     assert len(events) == 1
     assert events[0]["alert_type"] == "strong_trend"
-    assert "[STRONG] DOGEUSDT Binance" in events[0]["message"]
+    assert events[0]["message"] == "币种：DOGEUSDT\n信号：强趋势\n做多信号强度：88.4/100"
 
 
 def test_build_alert_event_rows_uses_priority_cooldown_for_p3_ignition_detected():

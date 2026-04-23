@@ -4,6 +4,7 @@ from altcoin_trend.signals.trade_candidate import (
     is_continuation_candidate,
     is_ignition_candidate,
     is_trade_candidate,
+    is_ultra_high_conviction_candidate,
 )
 
 
@@ -83,3 +84,42 @@ def test_is_ignition_candidate_rejects_weak_momentum_strength_derivatives_or_vet
     assert is_ignition_candidate(_ignition_row(volume_ratio_24h=1.7, volume_breakout_score=34.9)) is False
     assert is_ignition_candidate(_ignition_row(derivatives_score=29.9)) is False
     assert is_ignition_candidate(_ignition_row(veto_reason_codes=["risk"])) is False
+
+
+def _ultra_row(**overrides):
+    row = {
+        "return_1h_pct": 12.1,
+        "return_4h_pct": 38.1,
+        "return_24h_pct": 50.1,
+        "return_30d_pct": 65.1,
+        "volume_ratio_24h": 5.1,
+        "return_24h_percentile": 0.98,
+        "return_7d_percentile": 0.99,
+        "return_30d_percentile": 0.81,
+        "quality_score": 100.0,
+        "breakout_20d": True,
+        "veto_reason_codes": [],
+    }
+    row.update(overrides)
+    return row
+
+
+def test_ultra_high_conviction_candidate_accepts_research_rule_shape():
+    assert is_ultra_high_conviction_candidate(_ultra_row()) is True
+    assert is_ultra_high_conviction_candidate(SimpleNamespace(**_ultra_row())) is True
+
+
+def test_ultra_high_conviction_candidate_rejects_overextended_or_unconfirmed_rows():
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_1h_pct=11.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=37.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=110.1)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_pct=49.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_30d_pct=64.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=4.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=10.1)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_percentile=0.96)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_7d_percentile=0.97)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_30d_percentile=0.79)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(quality_score=79.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(breakout_20d=False)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(veto_reason_codes=["risk"])) is False

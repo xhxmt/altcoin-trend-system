@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from altcoin_trend.signals.v2 import (
+    ULTRA_HIGH_CONVICTION_FLAG,
     compute_actionability_score,
     compute_chase_risk_score,
     compute_risk_flags,
@@ -85,6 +86,30 @@ def _ignition_row(**overrides):
         "volume_impulse_score": 20.0,
         "volume_breakout_score": 20.0,
         "derivatives_score": 30.0,
+        "veto_reason_codes": [],
+    }
+    row.update(overrides)
+    return row
+
+
+def _ultra_row(**overrides):
+    row = {
+        "return_1h_pct": 12.1,
+        "return_4h_pct": 38.1,
+        "return_24h_pct": 50.1,
+        "return_30d_pct": 65.1,
+        "volume_ratio_24h": 5.1,
+        "return_24h_rank": 3,
+        "return_24h_percentile": 0.98,
+        "return_7d_rank": 5,
+        "return_7d_percentile": 0.99,
+        "return_30d_percentile": 0.81,
+        "relative_strength_score": 80.0,
+        "derivatives_score": 30.0,
+        "volume_breakout_score": 40.0,
+        "volume_impulse_score": 40.0,
+        "quality_score": 100.0,
+        "breakout_20d": True,
         "veto_reason_codes": [],
     }
     row.update(overrides)
@@ -197,5 +222,24 @@ def test_evaluate_signal_v2_returns_complete_result():
 
     assert result.continuation_grade == "A"
     assert result.ignition_grade is None
+    assert result.ultra_high_conviction is False
     assert result.signal_priority == 3
     assert result.actionability_score > 0.0
+
+
+def test_ultra_high_conviction_sets_flag_priority_and_actionability_bonus():
+    result = evaluate_signal_v2(_ultra_row())
+    baseline_actionability = compute_actionability_score(
+        _ultra_row(),
+        continuation_grade="B",
+        ignition_grade=None,
+        risk_flags=(),
+        chase_risk_score=result.chase_risk_score,
+    )
+
+    assert result.continuation_grade == "B"
+    assert result.ignition_grade is None
+    assert result.ultra_high_conviction is True
+    assert result.signal_priority == 3
+    assert ULTRA_HIGH_CONVICTION_FLAG in result.risk_flags
+    assert result.actionability_score > baseline_actionability

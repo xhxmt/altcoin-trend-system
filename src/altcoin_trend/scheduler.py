@@ -231,6 +231,7 @@ def _assign_return_percentiles_and_ranks(feature_rows: list[dict[str, Any]]) -> 
     for source_column, percentile_column, rank_column in (
         ("return_24h_pct", "return_24h_percentile", "return_24h_rank"),
         ("return_7d_pct", "return_7d_percentile", "return_7d_rank"),
+        ("return_30d_pct", "return_30d_percentile", "return_30d_rank"),
     ):
         if source_column not in frame.columns:
             for row in feature_rows:
@@ -250,6 +251,7 @@ def _apply_signal_v2_result(row: dict[str, Any]) -> None:
     result = evaluate_signal_v2(row)
     row["continuation_grade"] = result.continuation_grade
     row["ignition_grade"] = result.ignition_grade
+    row["ultra_high_conviction"] = result.ultra_high_conviction
     row["signal_priority"] = result.signal_priority
     row["risk_flags"] = list(result.risk_flags)
     row["chase_risk_score"] = result.chase_risk_score
@@ -325,8 +327,10 @@ def build_snapshot_rows_from_groups(
                 "volume_impulse_score": 0.0,
                 "return_24h_rank": None,
                 "return_7d_rank": None,
+                "return_30d_rank": None,
                 "continuation_grade": None,
                 "ignition_grade": None,
+                "ultra_high_conviction": False,
                 "signal_priority": 0,
                 "risk_flags": [],
                 "chase_risk_score": 0.0,
@@ -427,6 +431,7 @@ def _rank_rows_for_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[st
                 "trade_candidate": bool(row.get("trade_candidate", False)),
                 "continuation_candidate": bool(row.get("continuation_candidate", False)),
                 "ignition_candidate": bool(row.get("ignition_candidate", False)),
+                "ultra_high_conviction": bool(row.get("ultra_high_conviction", False)),
                 "continuation_grade": row.get("continuation_grade"),
                 "ignition_grade": row.get("ignition_grade"),
                 "signal_priority": int(row.get("signal_priority", 0)),

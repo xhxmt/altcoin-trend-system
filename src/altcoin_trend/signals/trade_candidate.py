@@ -34,6 +34,25 @@ class IgnitionCandidateRule:
 IGNITION_RULE = IgnitionCandidateRule()
 
 
+@dataclass(frozen=True)
+class UltraHighConvictionRule:
+    min_return_1h_pct: float = 12.0
+    min_return_4h_pct: float = 38.0
+    max_return_4h_pct: float = 110.0
+    min_return_24h_pct: float = 50.0
+    min_return_30d_pct: float = 65.0
+    min_volume_ratio_24h: float = 5.0
+    max_volume_ratio_24h: float = 10.0
+    min_return_24h_percentile: float = 0.97
+    min_return_7d_percentile: float = 0.98
+    min_return_30d_percentile: float = 0.80
+    min_quality_score: float = 80.0
+    require_20d_breakout: bool = True
+
+
+ULTRA_HIGH_CONVICTION_RULE = UltraHighConvictionRule()
+
+
 def _get(row: Mapping[str, Any] | Any, key: str, default: Any = None) -> Any:
     if isinstance(row, Mapping):
         return row.get(key, default)
@@ -114,6 +133,45 @@ def is_ignition_candidate(row: Mapping[str, Any] | Any, rule: IgnitionCandidateR
         and volume_confirmed
         and values["derivatives_score"] >= rule.min_derivatives_score
         and not veto_reason_codes
+    )
+
+
+def is_ultra_high_conviction_candidate(
+    row: Mapping[str, Any] | Any,
+    rule: UltraHighConvictionRule = ULTRA_HIGH_CONVICTION_RULE,
+) -> bool:
+    values = {
+        "return_1h_pct": _float_value(row, "return_1h_pct"),
+        "return_4h_pct": _float_value(row, "return_4h_pct"),
+        "return_24h_pct": _float_value(row, "return_24h_pct"),
+        "return_30d_pct": _float_value(row, "return_30d_pct"),
+        "volume_ratio_24h": _float_value(row, "volume_ratio_24h"),
+        "return_24h_percentile": _float_value(row, "return_24h_percentile"),
+        "return_7d_percentile": _float_value(row, "return_7d_percentile"),
+        "return_30d_percentile": _float_value(row, "return_30d_percentile"),
+        "quality_score": _float_value(row, "quality_score"),
+    }
+    if any(value is None for value in values.values()):
+        return False
+    veto_reason_codes = _normalize_items(_get(row, "veto_reason_codes", None))
+    if veto_reason_codes:
+        return False
+    breakout_20d = bool(_get(row, "breakout_20d", False))
+    if rule.require_20d_breakout and not breakout_20d:
+        return False
+
+    return (
+        values["return_1h_pct"] >= rule.min_return_1h_pct
+        and values["return_4h_pct"] >= rule.min_return_4h_pct
+        and values["return_4h_pct"] <= rule.max_return_4h_pct
+        and values["return_24h_pct"] >= rule.min_return_24h_pct
+        and values["return_30d_pct"] >= rule.min_return_30d_pct
+        and values["volume_ratio_24h"] >= rule.min_volume_ratio_24h
+        and values["volume_ratio_24h"] <= rule.max_volume_ratio_24h
+        and values["return_24h_percentile"] >= rule.min_return_24h_percentile
+        and values["return_7d_percentile"] >= rule.min_return_7d_percentile
+        and values["return_30d_percentile"] >= rule.min_return_30d_percentile
+        and values["quality_score"] >= rule.min_quality_score
     )
 
 

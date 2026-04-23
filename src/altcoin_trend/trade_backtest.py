@@ -221,6 +221,10 @@ def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, flo
     for name, mask in grade_masks.items():
         _populate_group(name, mask)
 
+    if "ultra_high_conviction" in signals.columns:
+        ultra_high_conviction = signals["ultra_high_conviction"].fillna(False).eq(True)
+        _populate_group("ultra_high_conviction", ultra_high_conviction)
+
     if "cross_exchange_confirmed" in signals.columns:
         confirmed = signals["cross_exchange_confirmed"].fillna(False).eq(True)
         _populate_group("cross_exchange_confirmed", confirmed)
@@ -263,18 +267,25 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     frame["veto_reason_codes"] = [[] for _ in range(len(frame))]
     frame["return_24h_rank"] = frame.groupby(["exchange", "ts"])["return_24h_pct"].rank(ascending=False, method="min")
     frame["return_7d_rank"] = frame.groupby(["exchange", "ts"])["return_7d_pct"].rank(ascending=False, method="min")
+    frame["return_30d_rank"] = frame.groupby(["exchange", "ts"])["return_30d_pct"].rank(ascending=False, method="min")
     return_24h_count = frame.groupby(["exchange", "ts"])["return_24h_pct"].transform("count")
     return_7d_count = frame.groupby(["exchange", "ts"])["return_7d_pct"].transform("count")
+    return_30d_count = frame.groupby(["exchange", "ts"])["return_30d_pct"].transform("count")
     frame["return_24h_percentile"] = pd.Series(index=frame.index, dtype="float64")
     frame["return_7d_percentile"] = pd.Series(index=frame.index, dtype="float64")
+    frame["return_30d_percentile"] = pd.Series(index=frame.index, dtype="float64")
     multi_24h = return_24h_count > 1
     multi_7d = return_7d_count > 1
+    multi_30d = return_30d_count > 1
     frame.loc[multi_24h, "return_24h_percentile"] = 1.0 - ((frame.loc[multi_24h, "return_24h_rank"] - 1.0) / (return_24h_count[multi_24h] - 1.0))
     frame.loc[multi_7d, "return_7d_percentile"] = 1.0 - ((frame.loc[multi_7d, "return_7d_rank"] - 1.0) / (return_7d_count[multi_7d] - 1.0))
+    frame.loc[multi_30d, "return_30d_percentile"] = 1.0 - ((frame.loc[multi_30d, "return_30d_rank"] - 1.0) / (return_30d_count[multi_30d] - 1.0))
     single_24h = (return_24h_count == 1) & frame["return_24h_pct"].notna()
     single_7d = (return_7d_count == 1) & frame["return_7d_pct"].notna()
+    single_30d = (return_30d_count == 1) & frame["return_30d_pct"].notna()
     frame.loc[single_24h, "return_24h_percentile"] = 1.0
     frame.loc[single_7d, "return_7d_percentile"] = 1.0
+    frame.loc[single_30d, "return_30d_percentile"] = 1.0
     frame["relative_strength_score"] = frame["return_24h_percentile"].mul(100.0).fillna(50.0)
     frame["derivatives_score"] = 50.0
     frame["volume_impulse_score"] = frame.apply(compute_volume_impulse_score, axis=1)
@@ -282,6 +293,7 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     signal_v2 = frame.apply(evaluate_signal_v2, axis=1)
     frame["continuation_grade"] = [result.continuation_grade for result in signal_v2]
     frame["ignition_grade"] = [result.ignition_grade for result in signal_v2]
+    frame["ultra_high_conviction"] = [result.ultra_high_conviction for result in signal_v2]
     frame["signal_priority"] = [result.signal_priority for result in signal_v2]
     frame["chase_risk_score"] = [result.chase_risk_score for result in signal_v2]
     frame["actionability_score"] = [result.actionability_score for result in signal_v2]

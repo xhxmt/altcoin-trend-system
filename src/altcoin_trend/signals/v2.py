@@ -5,12 +5,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from altcoin_trend.signals.trade_candidate import is_ultra_high_conviction_candidate
+
 
 CONTINUATION_A = "A"
 CONTINUATION_B = "B"
 IGNITION_EXTREME = "EXTREME"
 IGNITION_A = "A"
 IGNITION_B = "B"
+ULTRA_HIGH_CONVICTION_FLAG = "ULTRA_HIGH_CONVICTION"
 
 _CONTINUATION_PRIORITY = {CONTINUATION_A: 3, CONTINUATION_B: 2}
 _IGNITION_PRIORITY = {IGNITION_EXTREME: 3, IGNITION_A: 2, IGNITION_B: 1}
@@ -20,6 +23,7 @@ _IGNITION_PRIORITY = {IGNITION_EXTREME: 3, IGNITION_A: 2, IGNITION_B: 1}
 class SignalV2Result:
     continuation_grade: str | None
     ignition_grade: str | None
+    ultra_high_conviction: bool
     signal_priority: int
     risk_flags: tuple[str, ...]
     chase_risk_score: float
@@ -249,11 +253,16 @@ def compute_risk_flags(
     *,
     ignition_grade: str | None = None,
     chase_risk_score: float | None = None,
+    ultra_high_conviction: bool | None = None,
 ) -> tuple[str, ...]:
     if chase_risk_score is None:
         chase_risk_score = compute_chase_risk_score(row)
+    if ultra_high_conviction is None:
+        ultra_high_conviction = is_ultra_high_conviction_candidate(row)
 
     flags: list[str] = []
+    if ultra_high_conviction:
+        flags.append(ULTRA_HIGH_CONVICTION_FLAG)
     if ignition_grade == IGNITION_EXTREME:
         flags.append("EXTREME_MOVE")
     if chase_risk_score >= 60.0:
@@ -300,6 +309,9 @@ def compute_actionability_score(
     elif ignition_grade == IGNITION_B:
         score += 15.0
 
+    if ULTRA_HIGH_CONVICTION_FLAG in normalized_risk_flags:
+        score += 15.0
+
     relative_strength_score = float_value(row, "relative_strength_score") or 0.0
     volume_impulse_score = float_value(row, "volume_impulse_score")
     quality_score = float_value(row, "quality_score") or 0.0
@@ -327,8 +339,14 @@ def compute_actionability_score(
 def evaluate_signal_v2(row: Mapping[str, Any] | Any) -> SignalV2Result:
     continuation = _continuation_grade_fn(row)
     ignition = _ignition_grade_fn(row)
+    ultra_high_conviction = is_ultra_high_conviction_candidate(row)
     chase_risk = compute_chase_risk_score(row)
-    risk_flags = compute_risk_flags(row, ignition_grade=ignition, chase_risk_score=chase_risk)
+    risk_flags = compute_risk_flags(
+        row,
+        ignition_grade=ignition,
+        chase_risk_score=chase_risk,
+        ultra_high_conviction=ultra_high_conviction,
+    )
     actionability = compute_actionability_score(
         row,
         continuation_grade=continuation,
@@ -339,7 +357,8 @@ def evaluate_signal_v2(row: Mapping[str, Any] | Any) -> SignalV2Result:
     return SignalV2Result(
         continuation_grade=continuation,
         ignition_grade=ignition,
-        signal_priority=signal_priority_for(continuation, ignition),
+        ultra_high_conviction=ultra_high_conviction,
+        signal_priority=max(signal_priority_for(continuation, ignition), 3 if ultra_high_conviction else 0),
         risk_flags=risk_flags,
         chase_risk_score=chase_risk,
         actionability_score=actionability,

@@ -26,6 +26,7 @@ class RuleConfig:
     min_volume_ratio: float
     min_rs_percentile_24h: float
     min_rs_percentile_7d: float
+    min_rs_percentile_30d: float
     require_20d_breakout: bool
 
 
@@ -137,16 +138,17 @@ def build_feature_frame(raw_rows: list[dict[str, Any]], evaluation_days: int) ->
 
 def candidate_rules(iterations: int) -> list[RuleConfig]:
     seeds = [
-        (0.01, 0.02, 0.03, 1.5, 0.70, 0.60, False),
-        (0.02, 0.03, 0.04, 2.0, 0.75, 0.65, False),
-        (0.03, 0.05, 0.06, 2.5, 0.80, 0.70, False),
-        (0.04, 0.07, 0.08, 3.0, 0.85, 0.75, False),
-        (0.05, 0.09, 0.10, 4.0, 0.90, 0.80, False),
-        (0.02, 0.04, 0.05, 3.0, 0.85, 0.80, True),
-        (0.03, 0.06, 0.08, 2.0, 0.90, 0.85, True),
-        (0.01, 0.03, 0.06, 4.0, 0.95, 0.90, False),
-        (0.04, 0.04, 0.04, 5.0, 0.75, 0.70, True),
-        (0.00, 0.08, 0.12, 2.5, 0.95, 0.85, True),
+        (0.01, 0.02, 0.03, 1.5, 0.70, 0.60, 0.00, False),
+        (0.02, 0.03, 0.04, 2.0, 0.75, 0.65, 0.00, False),
+        (0.03, 0.05, 0.06, 2.5, 0.80, 0.70, 0.00, False),
+        (0.04, 0.07, 0.08, 3.0, 0.85, 0.75, 0.00, False),
+        (0.05, 0.09, 0.10, 4.0, 0.90, 0.80, 0.00, False),
+        (0.02, 0.04, 0.05, 3.0, 0.85, 0.80, 0.00, True),
+        (0.03, 0.06, 0.08, 2.0, 0.90, 0.85, 0.00, True),
+        (0.01, 0.03, 0.06, 4.0, 0.95, 0.90, 0.00, False),
+        (0.04, 0.04, 0.04, 5.0, 0.75, 0.70, 0.00, True),
+        (0.00, 0.08, 0.12, 2.5, 0.95, 0.85, 0.00, True),
+        (0.06, 0.08, 0.12, 5.5, 0.97, 0.97, 0.80, True),
     ]
     rules: list[RuleConfig] = []
     for index in range(iterations):
@@ -161,7 +163,8 @@ def candidate_rules(iterations: int) -> list[RuleConfig]:
                 min_volume_ratio=round(base[3] + cycle * 0.5, 4),
                 min_rs_percentile_24h=round(min(0.99, base[4] + cycle * 0.02), 4),
                 min_rs_percentile_7d=round(min(0.99, base[5] + cycle * 0.02), 4),
-                require_20d_breakout=bool(base[6]),
+                min_rs_percentile_30d=round(min(0.99, base[6] + cycle * 0.02), 4),
+                require_20d_breakout=bool(base[7]),
             )
         )
     return rules
@@ -175,6 +178,7 @@ def evaluate_rule(frame: pd.DataFrame, rule: RuleConfig, target_return: float) -
         & (frame["volume_ratio_24h"] >= rule.min_volume_ratio)
         & (frame["return_24h_pctile"] >= rule.min_rs_percentile_24h)
         & (frame["return_7d_pctile"] >= rule.min_rs_percentile_7d)
+        & (frame["return_30d_pctile"] >= rule.min_rs_percentile_30d)
     )
     if rule.require_20d_breakout:
         mask &= frame["breakout_20d"]

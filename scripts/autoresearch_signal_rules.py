@@ -22,7 +22,9 @@ class RuleConfig:
     name: str
     min_return_1h: float
     min_return_4h: float
+    max_return_4h: float
     min_return_24h: float
+    min_return_30d: float
     min_volume_ratio: float
     max_volume_ratio: float
     min_rs_percentile_24h: float
@@ -139,20 +141,21 @@ def build_feature_frame(raw_rows: list[dict[str, Any]], evaluation_days: int) ->
 
 def candidate_rules(iterations: int) -> list[RuleConfig]:
     seeds = [
-        (0.01, 0.02, 0.03, 1.5, 0.0, 0.70, 0.60, 0.00, False),
-        (0.02, 0.03, 0.04, 2.0, 0.0, 0.75, 0.65, 0.00, False),
-        (0.03, 0.05, 0.06, 2.5, 0.0, 0.80, 0.70, 0.00, False),
-        (0.04, 0.07, 0.08, 3.0, 0.0, 0.85, 0.75, 0.00, False),
-        (0.05, 0.09, 0.10, 4.0, 0.0, 0.90, 0.80, 0.00, False),
-        (0.02, 0.04, 0.05, 3.0, 0.0, 0.85, 0.80, 0.00, True),
-        (0.03, 0.06, 0.08, 2.0, 0.0, 0.90, 0.85, 0.00, True),
-        (0.01, 0.03, 0.06, 4.0, 0.0, 0.95, 0.90, 0.00, False),
-        (0.04, 0.04, 0.04, 5.0, 0.0, 0.75, 0.70, 0.00, True),
-        (0.00, 0.08, 0.12, 2.5, 0.0, 0.95, 0.85, 0.00, True),
-        (0.06, 0.08, 0.12, 5.5, 0.0, 0.97, 0.97, 0.80, True),
-        (0.07, 0.08, 0.50, 5.0, 10.0, 0.97, 0.98, 0.80, True),
-        (0.18, 0.08, 0.50, 5.0, 10.0, 0.97, 0.98, 0.80, True),
-        (0.12, 0.38, 0.50, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.01, 0.02, 0.0, 0.03, 0.0, 1.5, 0.0, 0.70, 0.60, 0.00, False),
+        (0.02, 0.03, 0.0, 0.04, 0.0, 2.0, 0.0, 0.75, 0.65, 0.00, False),
+        (0.03, 0.05, 0.0, 0.06, 0.0, 2.5, 0.0, 0.80, 0.70, 0.00, False),
+        (0.04, 0.07, 0.0, 0.08, 0.0, 3.0, 0.0, 0.85, 0.75, 0.00, False),
+        (0.05, 0.09, 0.0, 0.10, 0.0, 4.0, 0.0, 0.90, 0.80, 0.00, False),
+        (0.02, 0.04, 0.0, 0.05, 0.0, 3.0, 0.0, 0.85, 0.80, 0.00, True),
+        (0.03, 0.06, 0.0, 0.08, 0.0, 2.0, 0.0, 0.90, 0.85, 0.00, True),
+        (0.01, 0.03, 0.0, 0.06, 0.0, 4.0, 0.0, 0.95, 0.90, 0.00, False),
+        (0.04, 0.04, 0.0, 0.04, 0.0, 5.0, 0.0, 0.75, 0.70, 0.00, True),
+        (0.00, 0.08, 0.0, 0.12, 0.0, 2.5, 0.0, 0.95, 0.85, 0.00, True),
+        (0.06, 0.08, 0.0, 0.12, 0.0, 5.5, 0.0, 0.97, 0.97, 0.80, True),
+        (0.07, 0.08, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.18, 0.08, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.12, 0.38, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.12, 0.38, 1.10, 0.50, 0.65, 5.0, 10.0, 0.97, 0.98, 0.80, True),
     ]
     rules: list[RuleConfig] = []
     for index in range(iterations):
@@ -163,13 +166,15 @@ def candidate_rules(iterations: int) -> list[RuleConfig]:
                 name=f"iter_{index + 1:02d}",
                 min_return_1h=round(base[0] + cycle * 0.005, 4),
                 min_return_4h=round(base[1] + cycle * 0.005, 4),
-                min_return_24h=round(base[2] + cycle * 0.01, 4),
-                min_volume_ratio=round(base[3] + cycle * 0.5, 4),
-                max_volume_ratio=base[4],
-                min_rs_percentile_24h=round(min(0.99, base[5] + cycle * 0.02), 4),
-                min_rs_percentile_7d=round(min(0.99, base[6] + cycle * 0.02), 4),
-                min_rs_percentile_30d=round(min(0.99, base[7] + cycle * 0.02), 4),
-                require_20d_breakout=bool(base[8]),
+                max_return_4h=base[2],
+                min_return_24h=round(base[3] + cycle * 0.01, 4),
+                min_return_30d=base[4],
+                min_volume_ratio=round(base[5] + cycle * 0.5, 4),
+                max_volume_ratio=base[6],
+                min_rs_percentile_24h=round(min(0.99, base[7] + cycle * 0.02), 4),
+                min_rs_percentile_7d=round(min(0.99, base[8] + cycle * 0.02), 4),
+                min_rs_percentile_30d=round(min(0.99, base[9] + cycle * 0.02), 4),
+                require_20d_breakout=bool(base[10]),
             )
         )
     return rules
@@ -187,6 +192,10 @@ def evaluate_rule(frame: pd.DataFrame, rule: RuleConfig, target_return: float) -
     )
     if rule.require_20d_breakout:
         mask &= frame["breakout_20d"]
+    if rule.max_return_4h > 0:
+        mask &= frame["return_4h"] <= rule.max_return_4h
+    if rule.min_return_30d > 0:
+        mask &= frame["return_30d"] >= rule.min_return_30d
     if rule.max_volume_ratio > 0:
         mask &= frame["volume_ratio_24h"] <= rule.max_volume_ratio
 

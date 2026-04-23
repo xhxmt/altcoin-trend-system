@@ -14,9 +14,19 @@ from altcoin_trend.config import load_settings
 from altcoin_trend.db import build_engine
 from altcoin_trend.trade_backtest import _coerce_utc_datetime, _prepare_feature_frame, compute_forward_path_labels
 
+DEFAULT_OUTPUT_ROOT = "artifacts/autoresearch"
+SUMMARY_FILENAME = "summary.json"
+SIGNALS_FILENAME = "signals.csv"
+METADATA_FILENAME = "metadata.json"
+README_FILENAME = "README.md"
+
 
 def _utc_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _window_slug(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -175,13 +185,119 @@ def evaluate_ultra_signals(
     return summary, evaluated
 
 
-def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+def build_run_metadata(
+    *,
+    exchange: str,
+    start: datetime,
+    end: datetime,
+    market_start: datetime,
+    market_end: datetime,
+    output_dir: Path,
+    output_root: Path,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
+    generated = _coerce_utc_datetime(generated_at or datetime.now(timezone.utc))
+    return {
+        "script": "scripts/validate_ultra_signal_production.py",
+        "generated_at": generated.isoformat(),
+        "exchange": exchange,
+        "validation_window": {
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+        },
+        "warmup_window": {
+            "from": market_start.isoformat(),
+            "to": start.isoformat(),
+        },
+        "forward_window": {
+            "from": end.isoformat(),
+            "to": market_end.isoformat(),
+            "horizon": "24h",
+        },
+        "expected_inputs": {
+            "database_tables": ["alt_core.market_1m"],
+            "required_features": [
+                "return_1h_pct",
+                "return_4h_pct",
+                "return_24h_pct",
+                "return_30d_pct",
+                "volume_ratio_24h",
+                "return_24h_rank",
+                "return_24h_percentile",
+                "return_7d_percentile",
+                "return_30d_percentile",
+                "quality_score",
+                "breakout_20d",
+                "ultra_high_conviction",
+            ],
+        },
+        "expected_outputs": {
+            "summary": SUMMARY_FILENAME,
+            "signals": SIGNALS_FILENAME,
+            "metadata": METADATA_FILENAME,
+            "readme": README_FILENAME,
+        },
+        "artifacts": {
+            "output_root": str(output_root),
+            "output_dir": str(output_dir),
+        },
+        "metrics": {
+            "precision_1h": "share of ultra_high_conviction rows hitting +10% MFE within 1h",
+            "precision_4h": "share of ultra_high_conviction rows hitting +10% MFE within 4h",
+            "precision_24h": "share of ultra_high_conviction rows hitting +10% MFE within 24h",
+            "precision_before_dd8": "share hitting +10% before any -8% drawdown",
+        },
+    }
+
+
+def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
+    window = metadata["validation_window"]
+    warmup = metadata["warmup_window"]
+    forward = metadata["forward_window"]
+    outputs = metadata["expected_outputs"]
+    return "\n".join(
+        [
+            "# Ultra High Conviction Production Validation",
+            "",
+            f"- generated_at: {metadata['generated_at']}",
+            f"- exchange: {metadata['exchange']}",
+            f"- validation_window: {window['from']} -> {window['to']}",
+            f"- warmup_window: {warmup['from']} -> {warmup['to']}",
+            f"- forward_window: {forward['from']} -> {forward['to']} ({forward['horizon']})",
+            "",
+            "## Expected Inputs",
+            "",
+            "- database table: alt_core.market_1m",
+            "- feature fields: return_1h_pct, return_4h_pct, return_24h_pct, return_30d_pct, volume_ratio_24h, return_24h_rank, return_24h_percentile, return_7d_percentile, return_30d_percentile, quality_score, breakout_20d, ultra_high_conviction",
+            "",
+            "## Outputs",
+            "",
+            f"- {outputs['summary']}: aggregate hit-rate and drawdown summary",
+            f"- {outputs['signals']}: per-signal evaluation rows",
+            f"- {outputs['metadata']}: reproducibility manifest for this run",
+            f"- {outputs['readme']}: human-readable run contract",
+            "",
+            "## Snapshot",
+            "",
+            f"- ultra_signal_count: {summary['ultra_signal_count']}",
+            f"- precision_1h: {summary['precision_1h']}",
+            f"- precision_4h: {summary['precision_4h']}",
+            f"- precision_24h: {summary['precision_24h']}",
+            f"- precision_before_dd8: {summary['precision_before_dd8']}",
+            "",
+        ]
+    )
+
+
+def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / README_FILENAME).write_text(build_run_readme(summary, metadata), encoding="utf-8")
     if not rows:
-        (output_dir / "signals.csv").write_text("", encoding="utf-8")
+        (output_dir / SIGNALS_FILENAME).write_text("", encoding="utf-8")
         return
-    with (output_dir / "signals.csv").open("w", newline="", encoding="utf-8") as handle:
+    with (output_dir / SIGNALS_FILENAME).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
@@ -192,7 +308,7 @@ def main() -> int:
     parser.add_argument("--from", dest="start", required=True)
     parser.add_argument("--to", dest="end", required=True)
     parser.add_argument("--exchange", default="binance")
-    parser.add_argument("--output-root", default="artifacts/autoresearch")
+    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
     settings = load_settings()
@@ -200,8 +316,20 @@ def main() -> int:
     start = _parse_datetime(args.start)
     end = _parse_datetime(args.end)
     summary, rows = evaluate_ultra_signals(engine, args.exchange, start, end)
-    output_dir = Path(args.output_root) / f"{_utc_slug()}-production-ultra-{args.exchange}"
-    write_artifacts(output_dir, summary, rows)
+    output_root = Path(args.output_root)
+    output_dir = output_root / (
+        f"{_utc_slug()}-production-ultra-{args.exchange}-{_window_slug(start)}-{_window_slug(end)}"
+    )
+    metadata = build_run_metadata(
+        exchange=args.exchange,
+        start=start,
+        end=end,
+        market_start=_parse_datetime(summary["market_from"]),
+        market_end=_parse_datetime(summary["market_to"]),
+        output_dir=output_dir,
+        output_root=output_root,
+    )
+    write_artifacts(output_dir, summary, rows, metadata)
     print(f"output_dir={output_dir}")
     print(json.dumps(summary, sort_keys=True))
     return 0

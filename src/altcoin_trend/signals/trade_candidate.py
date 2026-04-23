@@ -44,6 +44,7 @@ class UltraHighConvictionRule:
     min_return_30d_pct: float = 65.0
     min_volume_ratio_24h: float = 5.0
     max_volume_ratio_24h: float = 10.0
+    max_return_24h_rank: int = 3
     min_return_24h_percentile: float = 0.999
     min_return_7d_percentile: float = 0.988
     min_return_30d_percentile: float = 0.80
@@ -68,6 +69,21 @@ def _float_value(row: Mapping[str, Any] | Any, key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _rank_or_percentile_gate(
+    row: Mapping[str, Any] | Any,
+    *,
+    rank_key: str,
+    max_rank: int | None,
+    percentile_key: str,
+    min_percentile: float,
+) -> bool:
+    rank = _float_value(row, rank_key)
+    if rank is not None and max_rank is not None:
+        return rank <= max_rank
+    percentile = _float_value(row, percentile_key)
+    return percentile is not None and percentile >= min_percentile
 
 
 def _normalize_items(value: Any) -> tuple[str, ...]:
@@ -147,7 +163,6 @@ def is_ultra_high_conviction_candidate(
         "return_24h_pct": _float_value(row, "return_24h_pct"),
         "return_30d_pct": _float_value(row, "return_30d_pct"),
         "volume_ratio_24h": _float_value(row, "volume_ratio_24h"),
-        "return_24h_percentile": _float_value(row, "return_24h_percentile"),
         "return_7d_percentile": _float_value(row, "return_7d_percentile"),
         "return_30d_percentile": _float_value(row, "return_30d_percentile"),
         "quality_score": _float_value(row, "quality_score"),
@@ -170,7 +185,13 @@ def is_ultra_high_conviction_candidate(
         and values["return_30d_pct"] >= rule.min_return_30d_pct
         and values["volume_ratio_24h"] >= rule.min_volume_ratio_24h
         and values["volume_ratio_24h"] <= rule.max_volume_ratio_24h
-        and values["return_24h_percentile"] >= rule.min_return_24h_percentile
+        and _rank_or_percentile_gate(
+            row,
+            rank_key="return_24h_rank",
+            max_rank=rule.max_return_24h_rank,
+            percentile_key="return_24h_percentile",
+            min_percentile=rule.min_return_24h_percentile,
+        )
         and values["return_7d_percentile"] >= rule.min_return_7d_percentile
         and values["return_30d_percentile"] >= rule.min_return_30d_percentile
         and values["quality_score"] >= rule.min_quality_score

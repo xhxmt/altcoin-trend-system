@@ -631,6 +631,58 @@ def test_build_alert_event_rows_dedupes_ultra_high_conviction_by_symbol():
     assert event["payload"]["exchanges"] == ["binance", "bybit"]
 
 
+def test_build_alert_event_rows_prefers_ultra_high_conviction_over_lower_severity_family():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = [
+        {
+            "asset_id": 401,
+            "exchange": "binance",
+            "symbol": "HIGHUSDT",
+            "tier": "strong",
+            "final_score": 82.0,
+            "trend_score": 80.0,
+            "volume_breakout_score": 55.0,
+            "relative_strength_score": 88.0,
+            "derivatives_score": 45.0,
+            "quality_score": 100.0,
+            "continuation_grade": "A",
+            "ignition_grade": None,
+            "ultra_high_conviction": True,
+            "signal_priority": 3,
+            "risk_flags": ["ULTRA_HIGH_CONVICTION"],
+            "chase_risk_score": 40.0,
+            "actionability_score": 86.0,
+            "cross_exchange_confirmed": True,
+            "veto_reason_codes": [],
+        },
+        {
+            "asset_id": 402,
+            "exchange": "bybit",
+            "symbol": "HIGHUSDT",
+            "tier": "strong",
+            "final_score": 90.0,
+            "trend_score": 84.0,
+            "volume_breakout_score": 60.0,
+            "relative_strength_score": 93.0,
+            "derivatives_score": 50.0,
+            "quality_score": 100.0,
+            "continuation_grade": None,
+            "ignition_grade": "EXTREME",
+            "ultra_high_conviction": False,
+            "signal_priority": 3,
+            "risk_flags": ["EXTREME_MOVE"],
+            "chase_risk_score": 75.0,
+            "actionability_score": 91.0,
+            "cross_exchange_confirmed": True,
+            "veto_reason_codes": [],
+        },
+    ]
+
+    events = build_alert_event_rows(rows, recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert [event["alert_type"] for event in events] == ["ultra_high_conviction", "ignition_extreme"]
+
+
 def test_build_alert_event_rows_handles_null_actionability_and_exchange_in_v2_aggregation():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     rank_row = {

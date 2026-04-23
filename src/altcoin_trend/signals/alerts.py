@@ -48,6 +48,7 @@ def _display_alert_type(alert_type: str) -> str:
         "continuation_confirmed": "趋势延续确认",
         "ignition_detected": "点火信号",
         "ignition_extreme": "极端点火",
+        "ultra_high_conviction": "超高置信",
         "exhaustion_risk": "过热风险",
     }
     return labels.get(alert_type, alert_type or "未知信号")
@@ -162,6 +163,8 @@ def build_explosive_move_early_alert_message(row: Mapping[str, Any] | Any) -> st
 
 
 def _alert_priority_for_type(alert_type: str, row: Mapping[str, Any] | Any | None = None) -> str:
+    if alert_type == "ultra_high_conviction":
+        return "P1"
     if alert_type == "ignition_extreme":
         return "P1"
     if alert_type == "continuation_confirmed":
@@ -192,6 +195,8 @@ def _v2_alert_type(row: Mapping[str, Any] | Any) -> str | None:
     except (TypeError, ValueError):
         chase_risk_score = 0.0
 
+    if bool(_get(row, "ultra_high_conviction", False)) or "ULTRA_HIGH_CONVICTION" in risk_flags:
+        return "ultra_high_conviction"
     if ignition_grade == "EXTREME":
         return "ignition_extreme"
     if continuation_grade in {"A", "B"}:
@@ -204,6 +209,8 @@ def _v2_alert_type(row: Mapping[str, Any] | Any) -> str | None:
 
 
 def _signal_family(alert_type: str) -> str:
+    if alert_type == "ultra_high_conviction":
+        return "ultra_high_conviction"
     if alert_type in {"ignition_extreme", "ignition_detected"}:
         return "ignition"
     if alert_type == "continuation_confirmed":
@@ -212,6 +219,8 @@ def _signal_family(alert_type: str) -> str:
 
 
 def _alert_type_severity(alert_type: str) -> int:
+    if alert_type == "ultra_high_conviction":
+        return 4
     if alert_type == "ignition_extreme":
         return 3
     if alert_type in {"continuation_confirmed", "ignition_detected"}:
@@ -222,6 +231,8 @@ def _alert_type_severity(alert_type: str) -> int:
 
 
 def _exchange_signal_label(row: Mapping[str, Any] | Any, family: str) -> str:
+    if family == "ultra_high_conviction":
+        return "ULTRA_HIGH_CONVICTION"
     if family == "ignition":
         ignition = _get(row, "ignition_grade", None)
         return f"IGNITION_{ignition}" if ignition else "NONE"
@@ -362,6 +373,7 @@ def build_alert_event_rows(
                                 },
                                 "continuation_grade": _get(row, "continuation_grade", None),
                                 "ignition_grade": _get(row, "ignition_grade", None),
+                                "ultra_high_conviction": bool(_get(row, "ultra_high_conviction", False)),
                                 "signal_priority": _get(row, "signal_priority", None),
                                 "actionability_score": _get(row, "actionability_score", None),
                                 "chase_risk_score": _get(row, "chase_risk_score", None),

@@ -156,6 +156,18 @@ def test_build_signal_v2_alert_message_shows_symbol_and_actionability_strength()
     assert "[EXHAUSTION_RISK]" not in text
 
 
+def test_build_signal_v2_alert_message_labels_ultra_high_conviction():
+    text = build_signal_v2_alert_message(
+        {
+            "symbol": "HIGHUSDT",
+            "actionability_score": 88.0,
+        },
+        "ultra_high_conviction",
+    )
+
+    assert text == "币种：HIGHUSDT\n信号：超高置信\n做多信号强度：88.0/100"
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -544,6 +556,79 @@ def test_build_alert_event_rows_prefers_higher_severity_ignition_over_actionabil
     assert len(ignition_events) == 1
     assert ignition_events[0]["alert_type"] == "ignition_extreme"
     assert ignition_events[0]["asset_id"] == 208
+
+
+def test_build_alert_event_rows_creates_ultra_high_conviction_event_before_continuation():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 301,
+        "exchange": "binance",
+        "symbol": "HIGHUSDT",
+        "tier": "strong",
+        "final_score": 82.0,
+        "trend_score": 80.0,
+        "volume_breakout_score": 55.0,
+        "relative_strength_score": 88.0,
+        "derivatives_score": 45.0,
+        "quality_score": 100.0,
+        "continuation_grade": "B",
+        "ignition_grade": None,
+        "ultra_high_conviction": True,
+        "signal_priority": 3,
+        "risk_flags": ["ULTRA_HIGH_CONVICTION"],
+        "chase_risk_score": 40.0,
+        "actionability_score": 88.0,
+        "cross_exchange_confirmed": False,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "ultra_high_conviction"
+    assert events[0]["message"] == "币种：HIGHUSDT\n信号：超高置信\n做多信号强度：88.0/100"
+    assert events[0]["payload"]["priority"] == "P1"
+    assert events[0]["payload"]["ultra_high_conviction"] is True
+    assert events[0]["payload"]["per_exchange_signals"] == {"binance": "ULTRA_HIGH_CONVICTION"}
+
+
+def test_build_alert_event_rows_dedupes_ultra_high_conviction_by_symbol():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = {
+        "symbol": "HIGHUSDT",
+        "tier": "strong",
+        "final_score": 82.0,
+        "trend_score": 80.0,
+        "volume_breakout_score": 55.0,
+        "relative_strength_score": 88.0,
+        "derivatives_score": 45.0,
+        "quality_score": 100.0,
+        "continuation_grade": "B",
+        "ignition_grade": None,
+        "ultra_high_conviction": True,
+        "signal_priority": 3,
+        "risk_flags": ["ULTRA_HIGH_CONVICTION"],
+        "chase_risk_score": 40.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+    rows = [
+        dict(base, asset_id=301, exchange="binance", actionability_score=85.0),
+        dict(base, asset_id=302, exchange="bybit", actionability_score=90.0),
+    ]
+
+    events = build_alert_event_rows(rows, recent_events=[], now=now, cooldown_seconds=3600)
+
+    ultra_events = [event for event in events if event["alert_type"] == "ultra_high_conviction"]
+    assert len(ultra_events) == 1
+    event = ultra_events[0]
+    assert event["asset_id"] == 302
+    assert event["payload"]["per_exchange_signals"] == {
+        "binance": "ULTRA_HIGH_CONVICTION",
+        "bybit": "ULTRA_HIGH_CONVICTION",
+    }
+    assert event["payload"]["asset_ids"] == [301, 302]
+    assert event["payload"]["exchanges"] == ["binance", "bybit"]
 
 
 def test_build_alert_event_rows_handles_null_actionability_and_exchange_in_v2_aggregation():

@@ -155,7 +155,7 @@ def candidate_rules(iterations: int) -> list[RuleConfig]:
         (0.07, 0.08, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
         (0.18, 0.08, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
         (0.12, 0.38, 0.0, 0.50, 0.0, 5.0, 10.0, 0.97, 0.98, 0.80, True),
-        (0.12, 0.38, 1.10, 0.50, 0.65, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.12, 0.38, 1.10, 0.50, 0.65, 5.0, 10.0, 0.999, 0.98, 0.80, True),
     ]
     rules: list[RuleConfig] = []
     for index in range(iterations):
@@ -171,7 +171,7 @@ def candidate_rules(iterations: int) -> list[RuleConfig]:
                 min_return_30d=base[4],
                 min_volume_ratio=round(base[5] + cycle * 0.5, 4),
                 max_volume_ratio=base[6],
-                min_rs_percentile_24h=round(min(0.99, base[7] + cycle * 0.02), 4),
+                min_rs_percentile_24h=round(min(1.0, base[7] + cycle * 0.02), 4),
                 min_rs_percentile_7d=round(min(0.99, base[8] + cycle * 0.02), 4),
                 min_rs_percentile_30d=round(min(0.99, base[9] + cycle * 0.02), 4),
                 require_20d_breakout=bool(base[10]),

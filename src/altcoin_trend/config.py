@@ -36,7 +36,10 @@ class AppSettings(BaseSettings):
     min_quote_volume_24h: float = 5_000_000
     min_listing_days: int = 60
     bootstrap_lookback_days: int = 90
+    snapshot_lookback_days: int = 31
+    stale_market_seconds: int = 3600
     signal_interval_seconds: int = 60
+    daemon_failure_backoff_max_seconds: int = 300
     alert_cooldown_seconds: int = 14_400
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -64,6 +67,27 @@ class AppSettings(BaseSettings):
     @property
     def blocklist_symbols(self) -> set[str]:
         return {item.strip().upper() for item in self.symbol_blocklist.split(",") if item.strip()}
+
+    def validate_runtime(self) -> None:
+        if not self.exchanges:
+            raise ValueError("ACTS_DEFAULT_EXCHANGES must include at least one exchange")
+        for exchange in self.exchanges:
+            if exchange not in {"binance", "bybit"}:
+                raise ValueError(f"Unsupported ACTS_DEFAULT_EXCHANGES value: {exchange}")
+        positive_fields = {
+            "ACTS_SNAPSHOT_LOOKBACK_DAYS": self.snapshot_lookback_days,
+            "ACTS_STALE_MARKET_SECONDS": self.stale_market_seconds,
+            "ACTS_SIGNAL_INTERVAL_SECONDS": self.signal_interval_seconds,
+            "ACTS_DAEMON_FAILURE_BACKOFF_MAX_SECONDS": self.daemon_failure_backoff_max_seconds,
+            "ACTS_ALERT_COOLDOWN_SECONDS": self.alert_cooldown_seconds,
+        }
+        for env_name, value in positive_fields.items():
+            if value <= 0:
+                raise ValueError(f"{env_name} must be greater than zero")
+        overlap = self.allowlist_symbols & self.blocklist_symbols
+        if overlap:
+            symbols = ",".join(sorted(overlap))
+            raise ValueError(f"Symbols cannot appear in both ACTS_SYMBOL_ALLOWLIST and ACTS_SYMBOL_BLOCKLIST: {symbols}")
 
 
 def load_settings() -> AppSettings:

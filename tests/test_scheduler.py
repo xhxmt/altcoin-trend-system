@@ -597,6 +597,100 @@ def test_write_run_once_snapshots_uses_streamed_market_groups(monkeypatch):
     assert next(rows for table_name, rows in inserted if table_name == "alt_signal.feature_snapshot")
 
 
+def test_write_run_once_snapshots_filters_and_logs_stale_market_groups(monkeypatch, caplog):
+    snapshot_ts = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    fresh_at_boundary = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BOUNDARYUSDT",
+                "base_asset": "BOUNDARY",
+                "ts": "2026-01-01T00:30:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+            }
+        ]
+    )
+    stale = pd.DataFrame(
+        [
+            {
+                "asset_id": 2,
+                "exchange": "bybit",
+                "symbol": "STALEUSDT",
+                "base_asset": "STALE",
+                "ts": "2026-01-01T00:29:59Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+            }
+        ]
+    )
+    inserted = []
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler._iter_market_row_groups",
+        lambda engine, lookback_days=31, end_ts=None: iter([fresh_at_boundary, stale]),
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler.insert_rows",
+        lambda engine, table_name, rows: inserted.append((table_name, list(rows))) or len(inserted[-1][1]),
+    )
+
+    from altcoin_trend.scheduler import write_run_once_snapshots
+
+    caplog.set_level("INFO", logger="altcoin_trend.scheduler")
+    features_written, _ = write_run_once_snapshots(
+        object(),
+        snapshot_ts=snapshot_ts,
+        stale_market_seconds=1800,
+    )
+
+    assert features_written == 1
+    feature_rows = next(rows for table_name, rows in inserted if table_name == "alt_signal.feature_snapshot")
+    assert feature_rows[0]["symbol"] == "BOUNDARYUSDT"
+    assert "symbol=STALEUSDT" in caplog.text
+    assert "stale_symbols=1" in caplog.text
+    assert "fresh_symbols=1" in caplog.text
+
+
+def test_write_run_once_snapshots_warns_when_all_symbols_are_stale(monkeypatch, caplog):
+    snapshot_ts = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    stale = pd.DataFrame(
+        [
+            {
+                "asset_id": 2,
+                "exchange": "bybit",
+                "symbol": "STALEUSDT",
+                "base_asset": "STALE",
+                "ts": "2026-01-01T00:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "quote_volume": 1000.0,
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler._iter_market_row_groups",
+        lambda engine, lookback_days=31, end_ts=None: iter([stale]),
+    )
+
+    from altcoin_trend.scheduler import write_run_once_snapshots
+
+    caplog.set_level("WARNING", logger="altcoin_trend.scheduler")
+    assert write_run_once_snapshots(object(), snapshot_ts=snapshot_ts, stale_market_seconds=1800) == (0, 0)
+    assert "removed all symbols" in caplog.text
+
+
 def test_process_alerts_converts_payload_to_jsonb_before_insert(monkeypatch):
     inserted = []
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -720,19 +814,32 @@ def test_build_snapshot_rows_penalizes_extreme_extension_above_4h_ema():
 def test_run_once_pipeline_writes_snapshots_with_engine(monkeypatch):
     calls = []
 
-    monkeypatch.setattr("altcoin_trend.scheduler.write_run_once_snapshots", lambda engine, snapshot_ts: (2, 4))
+    def fake_write_snapshots(engine, snapshot_ts, lookback_days, stale_market_seconds):
+        calls.append((lookback_days, stale_market_seconds))
+        return (2, 4)
+
+    monkeypatch.setattr("altcoin_trend.scheduler.write_run_once_snapshots", fake_write_snapshots)
 
     class Engine:
         pass
 
-    result = run_once_pipeline(engine=Engine(), now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    result = run_once_pipeline(
+        engine=Engine(),
+        now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        snapshot_lookback_days=45,
+        stale_market_seconds=600,
+    )
 
     assert result.status == "healthy"
     assert result.message == "features_written=2 ranks_written=4"
+    assert calls == [(45, 600)]
 
 
 def test_run_once_pipeline_reports_degraded_when_no_market_rows(monkeypatch):
-    monkeypatch.setattr("altcoin_trend.scheduler.write_run_once_snapshots", lambda engine, snapshot_ts: (0, 0))
+    monkeypatch.setattr(
+        "altcoin_trend.scheduler.write_run_once_snapshots",
+        lambda engine, snapshot_ts, lookback_days, stale_market_seconds: (0, 0),
+    )
 
     class Engine:
         pass

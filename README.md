@@ -16,6 +16,11 @@ environment variables still override values from that file.
 
 Leave `ACTS_SYMBOL_ALLOWLIST` empty to run in full-market mode. In both
 full-market and allowlist mode, `ACTS_SYMBOL_BLOCKLIST` still removes symbols.
+The daemon validates runtime settings at startup and logs the effective mode,
+snapshot lookback, stale-market threshold, alert cooldown, and maximum recovery
+backoff. Market rows older than `ACTS_STALE_MARKET_SECONDS` relative to the
+snapshot time are filtered before ranking; if most or all symbols are filtered,
+the scheduler emits a warning with per-run stale/fresh counts.
 
 ## CLI
 

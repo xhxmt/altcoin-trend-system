@@ -29,7 +29,7 @@ def test_daemon_runs_one_iteration_with_configured_sleep(monkeypatch):
     )
     monkeypatch.setattr(
         "altcoin_trend.daemon.run_once_pipeline",
-        lambda *, engine: calls.append("pipeline")
+        lambda *, engine, snapshot_lookback_days, stale_market_seconds: calls.append("pipeline")
         or SimpleNamespace(status="healthy", message="ok", started_at=datetime.now(timezone.utc)),
     )
     monkeypatch.setattr(
@@ -65,7 +65,7 @@ def test_daemon_runs_market_sync_without_allowlist_in_full_market_mode(monkeypat
     )
     monkeypatch.setattr(
         "altcoin_trend.daemon.run_once_pipeline",
-        lambda *, engine: calls.append("pipeline")
+        lambda *, engine, snapshot_lookback_days, stale_market_seconds: calls.append("pipeline")
         or SimpleNamespace(status="healthy", message="ok", started_at=datetime.now(timezone.utc)),
     )
     monkeypatch.setattr(
@@ -94,7 +94,11 @@ def test_daemon_reduces_httpx_request_log_noise(monkeypatch):
     monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: object())
     monkeypatch.setattr(
         "altcoin_trend.daemon.run_once_pipeline",
-        lambda *, engine: SimpleNamespace(status="healthy", message="ok", started_at=datetime.now(timezone.utc)),
+        lambda *, engine, snapshot_lookback_days, stale_market_seconds: SimpleNamespace(
+            status="healthy",
+            message="ok",
+            started_at=datetime.now(timezone.utc),
+        ),
     )
     monkeypatch.setattr(
         "altcoin_trend.daemon.process_alerts",
@@ -108,6 +112,136 @@ def test_daemon_reduces_httpx_request_log_noise(monkeypatch):
         assert httpx_logger.level == logging.WARNING
     finally:
         httpx_logger.setLevel(original_level)
+
+
+def test_daemon_recovers_after_pipeline_failure_with_backoff(monkeypatch):
+    settings = AppSettings(signal_interval_seconds=17, daemon_failure_backoff_max_seconds=30)
+    engine = object()
+    sleep_calls: list[int] = []
+    pipeline_calls = 0
+    alert_calls = 0
+
+    monkeypatch.setattr("altcoin_trend.daemon.load_settings", lambda: settings)
+    monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: engine)
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.sync_market_inputs",
+        lambda *, engine, settings, now, instrument_cache: SimpleNamespace(status="healthy", message="ok"),
+    )
+
+    def fake_pipeline(*, engine, snapshot_lookback_days, stale_market_seconds):
+        nonlocal pipeline_calls
+        pipeline_calls += 1
+        if pipeline_calls == 1:
+            raise ConnectionError("temporary database outage")
+        return SimpleNamespace(status="healthy", message="ok", started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    def fake_alerts(*, engine, now, cooldown_seconds, telegram_client):
+        nonlocal alert_calls
+        alert_calls += 1
+        return (0, 0)
+
+    def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) == 2:
+            raise StopLoop
+
+    monkeypatch.setattr("altcoin_trend.daemon.run_once_pipeline", fake_pipeline)
+    monkeypatch.setattr("altcoin_trend.daemon.process_alerts", fake_alerts)
+    monkeypatch.setattr("altcoin_trend.daemon.time.sleep", fake_sleep)
+
+    with pytest.raises(StopLoop):
+        daemon.main()
+
+    assert pipeline_calls == 2
+    assert alert_calls == 1
+    assert sleep_calls == [1, 17]
+
+
+def test_daemon_alert_failure_does_not_kill_subsequent_cycles(monkeypatch):
+    settings = AppSettings(signal_interval_seconds=17, daemon_failure_backoff_max_seconds=30)
+    engine = object()
+    sleep_calls: list[int] = []
+    alert_calls = 0
+
+    monkeypatch.setattr("altcoin_trend.daemon.load_settings", lambda: settings)
+    monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: engine)
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.sync_market_inputs",
+        lambda *, engine, settings, now, instrument_cache: SimpleNamespace(status="healthy", message="ok"),
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.run_once_pipeline",
+        lambda *, engine, snapshot_lookback_days, stale_market_seconds: SimpleNamespace(
+            status="healthy",
+            message="ok",
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    def fake_alerts(*, engine, now, cooldown_seconds, telegram_client):
+        nonlocal alert_calls
+        alert_calls += 1
+        if alert_calls == 1:
+            raise TimeoutError("telegram timeout")
+        return (1, 1)
+
+    def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) == 2:
+            raise StopLoop
+
+    monkeypatch.setattr("altcoin_trend.daemon.process_alerts", fake_alerts)
+    monkeypatch.setattr("altcoin_trend.daemon.time.sleep", fake_sleep)
+
+    with pytest.raises(StopLoop):
+        daemon.main()
+
+    assert alert_calls == 2
+    assert sleep_calls == [1, 17]
+
+
+def test_daemon_backoff_increases_and_caps_on_repeated_failure(monkeypatch):
+    settings = AppSettings(signal_interval_seconds=17, daemon_failure_backoff_max_seconds=2)
+    sleep_calls: list[int] = []
+
+    monkeypatch.setattr("altcoin_trend.daemon.load_settings", lambda: settings)
+    monkeypatch.setattr("altcoin_trend.daemon.build_engine", lambda loaded_settings: object())
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.sync_market_inputs",
+        lambda *, engine, settings, now, instrument_cache: SimpleNamespace(status="healthy", message="ok"),
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.run_once_pipeline",
+        lambda *, engine, snapshot_lookback_days, stale_market_seconds: (_ for _ in ()).throw(
+            ConnectionError("database unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.process_alerts",
+        lambda *, engine, now, cooldown_seconds, telegram_client: (_ for _ in ()).throw(
+            AssertionError("alerts should be skipped when pipeline fails")
+        ),
+    )
+
+    def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) == 4:
+            raise StopLoop
+
+    monkeypatch.setattr("altcoin_trend.daemon.time.sleep", fake_sleep)
+
+    with pytest.raises(StopLoop):
+        daemon.main()
+
+    assert sleep_calls == [1, 2, 2, 2]
+
+
+def test_daemon_fails_fast_for_invalid_runtime_config(monkeypatch):
+    settings = AppSettings(default_exchanges="kraken")
+    monkeypatch.setattr("altcoin_trend.daemon.load_settings", lambda: settings)
+
+    with pytest.raises(ValueError, match="Unsupported ACTS_DEFAULT_EXCHANGES"):
+        daemon.main()
 
 
 def test_sync_market_inputs_reuses_fetched_instruments(monkeypatch):

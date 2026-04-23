@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any
 
 import pandas as pd
@@ -22,6 +23,10 @@ from altcoin_trend.signals.alerts import MAX_SIGNAL_V2_COOLDOWN_SECONDS, build_a
 from altcoin_trend.signals.ranking import rank_scores
 from altcoin_trend.signals.telegram import TelegramClient
 from altcoin_trend.signals.v2 import compute_volume_impulse_score, evaluate_signal_v2
+
+
+logger = logging.getLogger(__name__)
+DEFAULT_STALE_MARKET_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -543,10 +548,87 @@ def _iter_market_row_groups(
         yield pd.DataFrame(current_rows)
 
 
-def write_run_once_snapshots(engine: Engine, snapshot_ts: datetime | None = None, lookback_days: int = 31) -> tuple[int, int]:
+def _filter_fresh_market_row_groups(
+    asset_groups: Iterable[pd.DataFrame],
+    *,
+    snapshot_ts: datetime,
+    stale_market_seconds: int = DEFAULT_STALE_MARKET_SECONDS,
+    stage: str = "snapshot",
+) -> Iterable[pd.DataFrame]:
+    cutoff_ts = pd.Timestamp(snapshot_ts) - pd.Timedelta(seconds=stale_market_seconds)
+    total = 0
+    stale = 0
+    fresh = 0
+    for group in asset_groups:
+        total += 1
+        if group.empty:
+            stale += 1
+            logger.info(
+                "Stale market group filtered stage=%s symbol=unknown exchange=unknown last_market_ts=none threshold_seconds=%s reason=empty_group",
+                stage,
+                stale_market_seconds,
+            )
+            continue
+        working = group.copy()
+        working["ts"] = pd.to_datetime(working["ts"], utc=True)
+        latest = working.iloc[working["ts"].argmax()]
+        latest_ts = latest["ts"]
+        symbol = str(latest.get("symbol", "unknown"))
+        exchange = str(latest.get("exchange", "unknown"))
+        if latest_ts < cutoff_ts:
+            stale += 1
+            logger.info(
+                "Stale market group filtered stage=%s symbol=%s exchange=%s last_market_ts=%s threshold_seconds=%s cutoff_ts=%s",
+                stage,
+                symbol,
+                exchange,
+                latest_ts.isoformat(),
+                stale_market_seconds,
+                cutoff_ts.isoformat(),
+            )
+            continue
+        fresh += 1
+        yield group
+
+    logger.info(
+        "Stale market filtering summary stage=%s total_symbols=%s stale_symbols=%s fresh_symbols=%s threshold_seconds=%s",
+        stage,
+        total,
+        stale,
+        fresh,
+        stale_market_seconds,
+    )
+    if total > 0 and stale == total:
+        logger.warning(
+            "Stale market filtering removed all symbols stage=%s total_symbols=%s threshold_seconds=%s",
+            stage,
+            total,
+            stale_market_seconds,
+        )
+    elif total > 0 and stale / total >= 0.8:
+        logger.warning(
+            "Stale market filtering removed most symbols stage=%s total_symbols=%s stale_symbols=%s threshold_seconds=%s",
+            stage,
+            total,
+            stale,
+            stale_market_seconds,
+        )
+
+
+def write_run_once_snapshots(
+    engine: Engine,
+    snapshot_ts: datetime | None = None,
+    lookback_days: int = 31,
+    stale_market_seconds: int = DEFAULT_STALE_MARKET_SECONDS,
+) -> tuple[int, int]:
     snapshot_ts = snapshot_ts or _utc_now()
-    feature_rows, rank_rows = build_snapshot_rows_from_groups(
+    market_groups = _filter_fresh_market_row_groups(
         _iter_market_row_groups(engine, lookback_days=lookback_days, end_ts=snapshot_ts),
+        snapshot_ts=snapshot_ts,
+        stale_market_seconds=stale_market_seconds,
+    )
+    feature_rows, rank_rows = build_snapshot_rows_from_groups(
+        market_groups,
         snapshot_ts,
     )
     if not feature_rows:
@@ -871,13 +953,20 @@ def run_once_pipeline(
     *,
     engine: Engine | None = None,
     now: datetime | None = None,
+    snapshot_lookback_days: int = 31,
+    stale_market_seconds: int = DEFAULT_STALE_MARKET_SECONDS,
 ) -> RunOnceResult:
     started_at = now or _utc_now()
     if step is None:
         if engine is None:
             return RunOnceResult(started_at=started_at, status="degraded", message="no pipeline step configured")
 
-        features_written, ranks_written = write_run_once_snapshots(engine, snapshot_ts=started_at)
+        features_written, ranks_written = write_run_once_snapshots(
+            engine,
+            snapshot_ts=started_at,
+            lookback_days=snapshot_lookback_days,
+            stale_market_seconds=stale_market_seconds,
+        )
         if features_written == 0:
             return RunOnceResult(started_at=started_at, status="degraded", message="no market rows available")
         return RunOnceResult(

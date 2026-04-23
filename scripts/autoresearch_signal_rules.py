@@ -151,6 +151,7 @@ def candidate_rules(iterations: int) -> list[RuleConfig]:
         (0.00, 0.08, 0.12, 2.5, 0.0, 0.95, 0.85, 0.00, True),
         (0.06, 0.08, 0.12, 5.5, 0.0, 0.97, 0.97, 0.80, True),
         (0.07, 0.08, 0.50, 5.0, 10.0, 0.97, 0.98, 0.80, True),
+        (0.18, 0.08, 0.50, 5.0, 10.0, 0.97, 0.98, 0.80, True),
     ]
     rules: list[RuleConfig] = []
     for index in range(iterations):

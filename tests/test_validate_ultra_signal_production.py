@@ -196,7 +196,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
             "return_24h_rank": 1,
             "return_24h_percentile": 0.99,
             "return_7d_percentile": 0.99,
-            "return_30d_percentile": 0.77,
+            "return_30d_percentile": 0.79,
             "quality_score": 90.0,
             "breakout_20d": True,
             "veto_reason_codes": [],

@@ -37,7 +37,7 @@ IGNITION_RULE = IgnitionCandidateRule()
 @dataclass(frozen=True)
 class UltraHighConvictionRule:
     min_return_1h_pct: float = 12.0
-    max_return_1h_pct: float = 35.0
+    max_return_1h_pct: float = 40.0
     min_return_4h_pct: float = 38.0
     max_return_4h_pct: float = 110.0
     min_return_24h_pct: float = 50.0
@@ -47,7 +47,7 @@ class UltraHighConvictionRule:
     max_return_24h_rank: int = 3
     min_return_24h_percentile: float = 0.999
     min_return_7d_percentile: float = 0.988
-    min_return_30d_percentile: float = 0.78
+    min_return_30d_percentile: float = 0.80
     min_quality_score: float = 80.0
     require_20d_breakout: bool = True
 

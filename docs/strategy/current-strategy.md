@@ -311,10 +311,10 @@ exhaustion_risk
 def is_ultra_high_conviction_candidate(row):
     return (
         row["return_1h_pct"] >= 12
-        and row["return_1h_pct"] <= 40
+        and row["return_1h_pct"] <= 35
         and row["return_4h_pct"] >= 38
         and row["return_4h_pct"] <= 110
-        and row["return_24h_pct"] >= 50
+        and row["return_24h_pct"] >= 80
         and row["return_30d_pct"] >= 65
         and row["volume_ratio_24h"] >= 5
         and row["volume_ratio_24h"] <= 10
@@ -323,7 +323,7 @@ def is_ultra_high_conviction_candidate(row):
             if row.get("return_24h_rank") is not None
             else row["return_24h_percentile"] >= 0.999
         )
-        and row["return_7d_percentile"] >= 0.988
+        and row["return_7d_percentile"] >= 0.98
         and row["return_30d_percentile"] >= 0.80
         and row["quality_score"] >= 80
         and row["breakout_20d"]
@@ -334,16 +334,16 @@ def is_ultra_high_conviction_candidate(row):
 规则解释：
 
 - 1h / 4h / 24h 动量：
-  - 要求 `1h >= 12%`、`4h >= 38%`、`24h >= 50%`，确保不是“慢趋势普通强势”，而是明显的强冲段。
-  - 同时限制 `1h <= 40%`、`4h <= 110%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
+  - 要求 `1h >= 12%`、`4h >= 38%`、`24h >= 80%`，确保不是“慢趋势普通强势”，而是已经进入明显强冲段。
+  - 同时限制 `1h <= 35%`、`4h <= 110%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
 - top-24h rank requirement：
   - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 3`。
   - 只有在 rank 缺失时，才回退到 `return_24h_percentile >= 0.999` 作为研究近似。
 - 7d / 30d strength：
-  - `return_7d_percentile >= 0.988`
+  - `return_7d_percentile >= 0.98`
   - `return_30d_percentile >= 0.80`
   - `return_30d_pct >= 65`
-  - 目的不是抓当天突发启动，而是要求这个币本身已经处在更大的强势上下文里。
+  - 目的不是抓当天突发启动，而是要求这个币本身已经处在更大的强势上下文里；同时把 7d 门槛从过窄的 `0.988` 放松到 `0.98`，允许更早一点但仍然强势的 ultra 进入候选。
 - breakout / confirmation：
   - 必须有 `breakout_20d=True`。
   - 必须有 `volume_ratio_24h` 在 `[5, 10]` 区间内，既要确认放量，也不要放到极端失真。
@@ -375,6 +375,12 @@ def is_ultra_high_conviction_candidate(row):
 - `signals.csv`
 - `metadata.json`
 - `README.md`
+
+最近一次固定 30 天双交易所验证（`2026-03-23` 到 `2026-04-22`）在当前规则下得到：
+
+- Binance：`ultra_signal_count=3`，`hit_10_before_dd8_count=2`，`precision_before_dd8=0.666667`
+- Bybit：`ultra_signal_count=3`，`hit_10_before_dd8_count=3`，`precision_before_dd8=1.0`
+- 合并后：`6` 个 ultra 信号中有 `5` 个在 `-8%` 回撤前先打到 `+10%`，加权 `precision_before_dd8=0.833333`
 
 输出目录统一为：
 
@@ -549,9 +555,9 @@ promotion / retention 口径：
      - 或 `derivatives_score >= 40`
      - 或增加信号后最大回撤过滤。
 
-3. 当前 `ultra_high_conviction` 样本数仍然很小。
-   - 这正是该规则的目标，但也意味着不能只看单次 precision。
-   - 后续调参必须固定验证窗口，并保留 `metadata.json` / `summary.json` 做横向比较。
+3. 当前 `ultra_high_conviction` 样本数虽然比初始 baseline 明显增加，但仍集中在少数极强走势上。
+   - 固定 30 天窗口里当前是 `6` 个样本，比 baseline 的 `4` 个有所提升，但还不能把单次高 precision 当成稳定结论。
+   - 后续调参仍必须固定验证窗口，并保留 `metadata.json` / `summary.json` 做横向比较。
 
 4. 当前 1h +10% 命中口径偏向极短线。
    - 后续应补充：

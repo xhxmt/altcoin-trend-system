@@ -319,7 +319,7 @@ def is_ultra_high_conviction_candidate(row):
         and row["volume_ratio_24h"] >= 5
         and row["volume_ratio_24h"] <= 10
         and (
-            row["return_24h_rank"] <= 5
+            row["return_24h_rank"] <= 3
             if row.get("return_24h_rank") is not None
             else row["return_24h_percentile"] >= 0.999
         )
@@ -337,7 +337,7 @@ def is_ultra_high_conviction_candidate(row):
   - 要求 `1h >= 12%`、`4h >= 38%`、`24h >= 50%`，确保不是“慢趋势普通强势”，而是明显的强冲段。
   - 同时限制 `1h <= 40%`、`4h <= 110%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
 - top-24h rank requirement：
-  - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 5`。
+  - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 3`。
   - 只有在 rank 缺失时，才回退到 `return_24h_percentile >= 0.999` 作为研究近似。
 - 7d / 30d strength：
   - `return_7d_percentile >= 0.988`
@@ -423,9 +423,9 @@ Validation window:
 
 2026-04-24 单门调参与诊断结果：
 
-- 先把 `top-24h rank` 从 `top 3` 放松到 `top 5`
+- 研究性地把 `top-24h rank` 从 `top 3` 放松到 `top 5`
 - 用同一个 30 天窗口重跑后，Binance 仍然是 `3` 条，Bybit 仍然是 `1` 条
-- 这说明当前样本瓶颈不是 rank gate 本身
+- 这说明当前样本瓶颈不是 rank gate 本身，因此该改动没有保留到当前生产规则
 
 30d `gate_flow` 诊断：
 

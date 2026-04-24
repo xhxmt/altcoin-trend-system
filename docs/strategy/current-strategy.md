@@ -313,7 +313,7 @@ def is_ultra_high_conviction_candidate(row):
         row["return_1h_pct"] >= 12
         and row["return_1h_pct"] <= 35
         and row["return_4h_pct"] >= 38
-        and row["return_4h_pct"] <= 110
+        and row["return_4h_pct"] <= 95
         and row["return_24h_pct"] >= 80
         and row["return_30d_pct"] >= 65
         and row["volume_ratio_24h"] >= 5
@@ -335,7 +335,7 @@ def is_ultra_high_conviction_candidate(row):
 
 - 1h / 4h / 24h 动量：
   - 要求 `1h >= 12%`、`4h >= 38%`、`24h >= 80%`，确保不是“慢趋势普通强势”，而是已经进入明显强冲段。
-  - 同时限制 `1h <= 35%`、`4h <= 110%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
+  - 同时限制 `1h <= 35%`、`4h <= 95%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
 - top-24h rank requirement：
   - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 3`。
   - 只有在 rank 缺失时，才回退到 `return_24h_percentile >= 0.999` 作为研究近似。
@@ -378,9 +378,9 @@ def is_ultra_high_conviction_candidate(row):
 
 最近一次固定 30 天双交易所验证（`2026-03-23` 到 `2026-04-22`）在当前规则下得到：
 
-- Binance：`ultra_signal_count=3`，`hit_10_before_dd8_count=2`，`precision_before_dd8=0.666667`
+- Binance：`ultra_signal_count=2`，`hit_10_before_dd8_count=2`，`precision_before_dd8=1.0`
 - Bybit：`ultra_signal_count=3`，`hit_10_before_dd8_count=3`，`precision_before_dd8=1.0`
-- 合并后：`6` 个 ultra 信号中有 `5` 个在 `-8%` 回撤前先打到 `+10%`，加权 `precision_before_dd8=0.833333`
+- 合并后：`5` 个 ultra 信号中有 `5` 个在 `-8%` 回撤前先打到 `+10%`，加权 `precision_before_dd8=1.0`
 
 输出目录统一为：
 
@@ -555,8 +555,8 @@ promotion / retention 口径：
      - 或 `derivatives_score >= 40`
      - 或增加信号后最大回撤过滤。
 
-3. 当前 `ultra_high_conviction` 样本数虽然比初始 baseline 明显增加，但仍集中在少数极强走势上。
-   - 固定 30 天窗口里当前是 `6` 个样本，比 baseline 的 `4` 个有所提升，但还不能把单次高 precision 当成稳定结论。
+3. 当前 `ultra_high_conviction` 样本数虽然比初始 baseline 仍略高，但依然集中在少数极强走势上。
+   - 固定 30 天窗口里当前是 `5` 个样本，比 baseline 的 `4` 个略有提升，但还不能把这次 `1.0` 的 path-risk precision 当成长期稳定结论。
    - 后续调参仍必须固定验证窗口，并保留 `metadata.json` / `summary.json` 做横向比较。
 
 4. 当前 1h +10% 命中口径偏向极短线。

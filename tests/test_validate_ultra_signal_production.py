@@ -148,7 +148,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 15.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 2,
@@ -162,7 +162,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 15.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 6,
@@ -176,7 +176,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 15.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 3,
@@ -190,7 +190,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 15.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 1,
@@ -204,7 +204,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 41.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 2,
@@ -218,7 +218,7 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
         {
             "return_1h_pct": 15.0,
             "return_4h_pct": 50.0,
-            "return_24h_pct": 60.0,
+            "return_24h_pct": 90.0,
             "return_30d_pct": 70.0,
             "volume_ratio_24h": 6.0,
             "return_24h_rank": 2,

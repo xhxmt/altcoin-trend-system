@@ -40,7 +40,7 @@ class UltraHighConvictionRule:
     max_return_1h_pct: float = 35.0
     min_return_4h_pct: float = 38.0
     max_return_4h_pct: float = 110.0
-    min_return_24h_pct: float = 50.0
+    min_return_24h_pct: float = 80.0
     min_return_30d_pct: float = 65.0
     min_volume_ratio_24h: float = 5.0
     max_volume_ratio_24h: float = 10.0

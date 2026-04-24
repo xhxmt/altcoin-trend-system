@@ -96,7 +96,7 @@ def _ultra_row(**overrides):
     row = {
         "return_1h_pct": 12.1,
         "return_4h_pct": 38.1,
-        "return_24h_pct": 50.1,
+        "return_24h_pct": 80.1,
         "return_30d_pct": 65.1,
         "volume_ratio_24h": 5.1,
         "return_24h_rank": 1,

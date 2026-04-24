@@ -90,7 +90,7 @@ def _ultra_row(**overrides):
     row = {
         "return_1h_pct": 12.1,
         "return_4h_pct": 38.1,
-        "return_24h_pct": 50.1,
+        "return_24h_pct": 80.1,
         "return_30d_pct": 65.1,
         "volume_ratio_24h": 5.1,
         "return_24h_percentile": 0.999,
@@ -131,7 +131,7 @@ def test_ultra_high_conviction_candidate_rejects_overextended_or_unconfirmed_row
     assert is_ultra_high_conviction_candidate(_ultra_row(return_1h_pct=35.1)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=37.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_4h_pct=110.1)) is False
-    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_pct=49.9)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_pct=79.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_30d_pct=64.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=4.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=10.1)) is False

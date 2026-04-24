@@ -16,6 +16,7 @@ SIGNALS_FILENAME = _MODULE.SIGNALS_FILENAME
 SUMMARY_FILENAME = _MODULE.SUMMARY_FILENAME
 build_run_metadata = _MODULE.build_run_metadata
 summarize_ultra_gate_flow = _MODULE.summarize_ultra_gate_flow
+summarize_evaluated_signals = _MODULE.summarize_evaluated_signals
 write_artifacts = _MODULE.write_artifacts
 
 
@@ -39,6 +40,7 @@ def test_build_run_metadata_captures_validation_contract(tmp_path):
     assert metadata["warmup_window"]["from"] == "2025-12-22T10:00:00+00:00"
     assert metadata["forward_window"]["to"] == "2026-04-23T11:00:00+00:00"
     assert metadata["expected_outputs"]["summary"] == SUMMARY_FILENAME
+    assert metadata["expected_outputs"]["signal_identity_columns"] == ["exchange", "symbol", "ts", "asset_id"]
     assert metadata["artifacts"]["output_dir"] == str(output_dir)
 
 
@@ -63,8 +65,17 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
         "precision_4h": 1.0,
         "precision_24h": 1.0,
         "precision_before_dd8": 0.5,
+        "hit_10pct_first_rate": 0.5,
+        "drawdown_8pct_first_rate": 0.25,
+        "avg_mfe_24h_pct": 42.0,
+        "avg_mae_24h_pct": 18.0,
+        "avg_mfe_before_dd8_pct": 21.0,
+        "avg_mae_before_hit_10pct": 7.25,
+        "avg_mae_after_hit_10pct": 5.75,
+        "median_time_to_hit_10pct_minutes": 30.0,
+        "median_time_to_drawdown_8pct_minutes": 45.0,
     }
-    rows = [{"symbol": "HIGHUSDT", "mfe_1h_pct": 12.0}]
+    rows = [{"symbol": "HIGHUSDT", "mfe_1h_pct": 12.0, "mae_before_hit_10pct": 4.0}]
     metadata = build_run_metadata(
         exchange="binance",
         start=datetime(2026, 1, 22, 10, 0, tzinfo=timezone.utc),
@@ -87,7 +98,8 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
     readme = (output_dir / README_FILENAME).read_text(encoding="utf-8")
     assert "validation_window: 2026-01-22T10:00:00+00:00 -> 2026-04-22T10:00:00+00:00" in readme
     assert "signals.csv: per-signal evaluation rows" in readme
-    assert "pass_top_24h_rank_gate: 8" in readme
+    assert "avg_mae_before_hit_10pct: 7.25" in readme
+    assert "pass_rank_24h: 0" in readme
     assert "pass_quality_gate: 4" in readme
 
 
@@ -105,6 +117,15 @@ def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
         "precision_4h": 0.0,
         "precision_24h": 0.0,
         "precision_before_dd8": 0.0,
+        "hit_10pct_first_rate": 0.0,
+        "drawdown_8pct_first_rate": 0.0,
+        "avg_mfe_24h_pct": 0.0,
+        "avg_mae_24h_pct": 0.0,
+        "avg_mfe_before_dd8_pct": 0.0,
+        "avg_mae_before_hit_10pct": 0.0,
+        "avg_mae_after_hit_10pct": 0.0,
+        "median_time_to_hit_10pct_minutes": 0.0,
+        "median_time_to_drawdown_8pct_minutes": 0.0,
     }
     metadata = build_run_metadata(
         exchange="bybit",
@@ -215,14 +236,96 @@ def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():
     assert gate_flow == {
         "window_feature_rows": 6,
         "pass_no_veto": 5,
+        "pass_20d_breakout": 5,
         "pass_breakout_20d": 5,
+        "pass_min_return_1h": 5,
+        "pass_max_return_1h": 4,
         "pass_1h_range": 4,
+        "pass_min_return_4h": 4,
+        "pass_max_return_4h": 4,
         "pass_4h_range": 4,
+        "pass_min_return_24h": 4,
         "pass_24h_momentum": 4,
+        "pass_min_return_30d": 4,
         "pass_30d_return": 4,
+        "pass_min_volume_ratio_24h": 4,
+        "pass_max_volume_ratio_24h": 4,
         "pass_volume_ratio_24h_range": 4,
+        "pass_rank_24h": 3,
         "pass_top_24h_rank_gate": 3,
+        "pass_rs_7d": 2,
         "pass_7d_strength_gate": 2,
+        "pass_rs_30d": 1,
         "pass_30d_strength_gate": 1,
         "pass_quality_gate": 1,
+        "final_ultra_signal_count": 1,
     }
+
+
+def test_summarize_evaluated_signals_reports_path_risk_metrics():
+    summary = summarize_evaluated_signals(
+        [
+            {
+                "hit_10pct_1h": True,
+                "hit_10pct_4h": True,
+                "hit_10pct_24h": True,
+                "hit_10pct_before_drawdown_8pct": True,
+                "hit_10pct_first": True,
+                "drawdown_8pct_first": False,
+                "mfe_1h_pct": 12.0,
+                "mfe_24h_pct": 30.0,
+                "mae_24h_pct": 5.0,
+                "mfe_before_dd8_pct": 15.0,
+                "mae_before_hit_10pct": 2.0,
+                "mae_after_hit_10pct": 4.0,
+                "time_to_hit_10pct_minutes": 20.0,
+                "time_to_drawdown_8pct_minutes": 60.0,
+            },
+            {
+                "hit_10pct_1h": False,
+                "hit_10pct_4h": True,
+                "hit_10pct_24h": True,
+                "hit_10pct_before_drawdown_8pct": False,
+                "hit_10pct_first": False,
+                "drawdown_8pct_first": True,
+                "mfe_1h_pct": 8.0,
+                "mfe_24h_pct": 40.0,
+                "mae_24h_pct": 12.0,
+                "mfe_before_dd8_pct": 10.0,
+                "mae_before_hit_10pct": 9.0,
+                "mae_after_hit_10pct": 1.0,
+                "time_to_hit_10pct_minutes": None,
+                "time_to_drawdown_8pct_minutes": 10.0,
+            },
+            {
+                "hit_10pct_1h": False,
+                "hit_10pct_4h": False,
+                "hit_10pct_24h": False,
+                "hit_10pct_before_drawdown_8pct": False,
+                "hit_10pct_first": None,
+                "drawdown_8pct_first": None,
+                "mfe_1h_pct": 1.0,
+                "mfe_24h_pct": 6.0,
+                "mae_24h_pct": 3.0,
+                "mfe_before_dd8_pct": 6.0,
+                "mae_before_hit_10pct": 3.0,
+                "mae_after_hit_10pct": None,
+                "time_to_hit_10pct_minutes": None,
+                "time_to_drawdown_8pct_minutes": None,
+            },
+        ]
+    )
+
+    assert summary["ultra_signal_count"] == 3
+    assert summary["hit_10_24h_count"] == 2
+    assert summary["hit_10_before_dd8_count"] == 1
+    assert summary["hit_10pct_first_count"] == 1
+    assert summary["drawdown_8pct_first_count"] == 1
+    assert summary["unresolved_24h_count"] == 1
+    assert summary["hit_10pct_first_rate"] == 0.333333
+    assert summary["drawdown_8pct_first_rate"] == 0.333333
+    assert summary["avg_mfe_before_dd8_pct"] == 10.333333
+    assert summary["avg_mae_before_hit_10pct"] == 4.666667
+    assert summary["avg_mae_after_hit_10pct"] == 2.5
+    assert summary["median_time_to_hit_10pct_minutes"] == 20.0
+    assert summary["median_time_to_drawdown_8pct_minutes"] == 35.0

@@ -74,11 +74,49 @@ def _empty_forward_path_labels() -> dict[str, Any]:
         "mae_1h_pct": 0.0,
         "mae_4h_pct": 0.0,
         "mae_24h_pct": 0.0,
+        "mfe_before_dd8_pct": 0.0,
+        "mae_before_hit_10pct": 0.0,
+        "mae_after_hit_10pct": None,
         "hit_5pct_before_drawdown_5pct": False,
         "hit_10pct_before_drawdown_8pct": False,
+        "hit_10pct_first": None,
+        "drawdown_8pct_first": None,
         "time_to_hit_5pct_minutes": None,
         "time_to_hit_10pct_minutes": None,
+        "time_to_drawdown_8pct_minutes": None,
     }
+
+
+def _summarize_path_mfe_pct(close: float, rows: pd.DataFrame) -> float:
+    if rows.empty:
+        return 0.0
+    window_high = max(float(rows["high"].max()), close)
+    return round(max((window_high / close - 1.0) * 100.0, 0.0), 6)
+
+
+def _summarize_path_mae_pct(close: float, rows: pd.DataFrame) -> float:
+    if rows.empty:
+        return 0.0
+    window_low = min(float(rows["low"].min()), close)
+    return round(max((1.0 - window_low / close) * 100.0, 0.0), 6)
+
+
+def _first_barrier_index(
+    rows: pd.DataFrame,
+    *,
+    column: str,
+    comparison: str,
+    threshold: float,
+) -> int | None:
+    if rows.empty:
+        return None
+    if comparison == "ge":
+        matched = rows.index[rows[column] >= threshold]
+    elif comparison == "le":
+        matched = rows.index[rows[column] <= threshold]
+    else:
+        raise ValueError(f"unsupported comparison: {comparison}")
+    return int(matched[0]) if len(matched) else None
 
 
 def compute_forward_path_labels(
@@ -142,6 +180,62 @@ def compute_forward_path_labels(
         else:
             labels[hit_key] = False
             labels[time_key] = None
+
+    horizon_rows = future[future["ts"] <= horizon_24h].reset_index(drop=True)
+    if horizon_rows.empty:
+        return labels
+
+    target_10pct_price = round(close * 1.10, 12)
+    drawdown_8pct_price = round(close * 0.92, 12)
+    first_hit_10pct_idx = _first_barrier_index(
+        horizon_rows,
+        column="high",
+        comparison="ge",
+        threshold=target_10pct_price,
+    )
+    first_drawdown_8pct_idx = _first_barrier_index(
+        horizon_rows,
+        column="low",
+        comparison="le",
+        threshold=drawdown_8pct_price,
+    )
+
+    if first_drawdown_8pct_idx is not None:
+        drawdown_time = _coerce_utc_timestamp(horizon_rows.iloc[first_drawdown_8pct_idx]["ts"])
+        labels["time_to_drawdown_8pct_minutes"] = round(
+            (drawdown_time - signal_ts_utc).total_seconds() / 60.0,
+            6,
+        )
+
+    if first_hit_10pct_idx is None and first_drawdown_8pct_idx is None:
+        labels["hit_10pct_first"] = None
+        labels["drawdown_8pct_first"] = None
+    elif first_hit_10pct_idx is not None and (
+        first_drawdown_8pct_idx is None or first_hit_10pct_idx < first_drawdown_8pct_idx
+    ):
+        labels["hit_10pct_first"] = True
+        labels["drawdown_8pct_first"] = False
+    else:
+        labels["hit_10pct_first"] = False
+        labels["drawdown_8pct_first"] = True
+
+    if first_drawdown_8pct_idx is None:
+        rows_before_drawdown = horizon_rows
+    else:
+        rows_before_drawdown = horizon_rows.iloc[:first_drawdown_8pct_idx]
+    labels["mfe_before_dd8_pct"] = _summarize_path_mfe_pct(close, rows_before_drawdown)
+
+    if first_hit_10pct_idx is None:
+        rows_before_hit = horizon_rows
+    else:
+        rows_before_hit = horizon_rows.iloc[: first_hit_10pct_idx + 1]
+    labels["mae_before_hit_10pct"] = _summarize_path_mae_pct(close, rows_before_hit)
+
+    if first_hit_10pct_idx is None:
+        labels["mae_after_hit_10pct"] = None
+    else:
+        rows_after_hit = horizon_rows.iloc[first_hit_10pct_idx + 1 :]
+        labels["mae_after_hit_10pct"] = _summarize_path_mae_pct(close, rows_after_hit)
 
     return labels
 

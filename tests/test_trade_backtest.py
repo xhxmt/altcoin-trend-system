@@ -296,6 +296,53 @@ def test_compute_forward_path_labels_detects_drawdown_before_target():
     assert labels["time_to_hit_10pct_minutes"] is None
 
 
+def test_compute_forward_path_labels_reports_path_risk_when_target_hits_first():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 103.0, "low": 99.0},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 111.0, "low": 97.0},
+            {"ts": pd.Timestamp("2026-01-01T00:03:00Z"), "high": 108.0, "low": 91.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["hit_10pct_before_drawdown_8pct"] is True
+    assert labels["time_to_hit_10pct_minutes"] == 2.0
+    assert labels["time_to_drawdown_8pct_minutes"] == 3.0
+    assert labels["hit_10pct_first"] is True
+    assert labels["drawdown_8pct_first"] is False
+    assert labels["mfe_before_dd8_pct"] == 11.0
+    assert labels["mae_before_hit_10pct"] == 3.0
+    assert labels["mae_after_hit_10pct"] == 9.0
+
+
+def test_compute_forward_path_labels_reports_path_risk_when_drawdown_hits_first():
+    future = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-01-01T00:01:00Z"), "high": 104.0, "low": 91.0},
+            {"ts": pd.Timestamp("2026-01-01T00:02:00Z"), "high": 111.0, "low": 95.0},
+        ]
+    )
+
+    labels = compute_forward_path_labels(
+        signal_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+        signal_close=100.0,
+        future_rows=future,
+    )
+
+    assert labels["time_to_drawdown_8pct_minutes"] == 1.0
+    assert labels["hit_10pct_first"] is False
+    assert labels["drawdown_8pct_first"] is True
+    assert labels["mfe_before_dd8_pct"] == 0.0
+    assert labels["mae_before_hit_10pct"] == 9.0
+    assert labels["mae_after_hit_10pct"] == 0.0
+
+
 def test_compute_forward_path_labels_ignores_target_hits_beyond_24h():
     future = pd.DataFrame(
         [
@@ -366,8 +413,14 @@ def test_compute_forward_path_labels_handles_empty_future_rows():
     assert labels["mae_24h_pct"] == 0.0
     assert labels["hit_5pct_before_drawdown_5pct"] is False
     assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["hit_10pct_first"] is None
+    assert labels["drawdown_8pct_first"] is None
     assert labels["time_to_hit_5pct_minutes"] is None
     assert labels["time_to_hit_10pct_minutes"] is None
+    assert labels["time_to_drawdown_8pct_minutes"] is None
+    assert labels["mfe_before_dd8_pct"] == 0.0
+    assert labels["mae_before_hit_10pct"] == 0.0
+    assert labels["mae_after_hit_10pct"] is None
 
 
 def test_run_signal_v2_backtest_uses_real_forward_path_labels_and_ohlcv_defaults(monkeypatch):

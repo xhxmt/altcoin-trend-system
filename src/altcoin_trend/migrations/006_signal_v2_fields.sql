@@ -25,5 +25,6 @@ ALTER TABLE alt_signal.alert_events
         'continuation_confirmed',
         'ignition_detected',
         'ignition_extreme',
+        'ultra_high_conviction',
         'exhaustion_risk'
     ));

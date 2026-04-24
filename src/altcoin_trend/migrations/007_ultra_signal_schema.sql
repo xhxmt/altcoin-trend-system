@@ -1,6 +1,7 @@
 ALTER TABLE alt_signal.feature_snapshot
-    ADD COLUMN IF NOT EXISTS continuation_candidate BOOLEAN NOT NULL DEFAULT FALSE,
-    ADD COLUMN IF NOT EXISTS ignition_candidate BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS return_30d_percentile DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS return_30d_rank INTEGER,
+    ADD COLUMN IF NOT EXISTS ultra_high_conviction BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE alt_signal.alert_events
     DROP CONSTRAINT IF EXISTS alert_events_alert_type_check;

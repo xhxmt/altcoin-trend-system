@@ -130,6 +130,31 @@ def test_signal_v2_migration_adds_expected_feature_columns():
         assert f"ADD COLUMN IF NOT EXISTS {column}" in sql_text
 
 
+def test_alert_event_constraints_in_replayed_migrations_allow_current_alert_types():
+    expected_alert_types = [
+        "strong_trend",
+        "watchlist_enter",
+        "breakout_confirmed",
+        "risk_downgrade",
+        "explosive_move_early",
+        "continuation_confirmed",
+        "ignition_detected",
+        "ignition_extreme",
+        "ultra_high_conviction",
+        "exhaustion_risk",
+    ]
+    for migration_name in ("005_ignition_signals.sql", "006_signal_v2_fields.sql", "007_ultra_signal_schema.sql"):
+        sql_text = resources.files("altcoin_trend.migrations").joinpath(migration_name).read_text()
+        for alert_type in expected_alert_types:
+            assert f"'{alert_type}'" in sql_text
+
+
+def test_ultra_signal_schema_migration_adds_missing_snapshot_columns():
+    sql_text = resources.files("altcoin_trend.migrations").joinpath("007_ultra_signal_schema.sql").read_text()
+    for column in ("return_30d_percentile", "return_30d_rank", "ultra_high_conviction"):
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql_text
+
+
 def test_insert_rows_returns_zero_for_empty_input():
     engine = _InsertFakeEngine()
 

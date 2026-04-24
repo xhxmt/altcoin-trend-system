@@ -532,9 +532,9 @@ promotion / retention 口径：
   - 首先看 `precision_1h`、`precision_4h`、`precision_24h`
   - 再看更严格的 `precision_before_dd8`
 - false-positive tolerance：
-  - 不接受“高 precision 但样本数接近 0”的解释；必须持续跟踪 `ultra_signal_count`
+  - 不接受“高 precision 但样本数接近 0”的解释；必须持续跟踪对应家族的 `signal_count`
 - chase-risk ceiling：
-  - 规则层面已经用 `max_return_1h=40`、`max_return_4h=110`、`max_volume_ratio_24h=10` 做第一道上限
+  - ultra 规则层面已经用 `max_return_1h=35`、`max_return_4h=95`、`max_volume_ratio_24h=10` 做第一道上限
   - 线上观察时还要结合 `chase_risk_score` 与 `risk_flags`
 - per-symbol / per-exchange dedupe：
   - 告警按 `symbol + signal family` 聚合

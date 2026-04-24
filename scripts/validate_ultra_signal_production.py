@@ -12,6 +12,7 @@ from sqlalchemy import Engine, text
 
 from altcoin_trend.config import load_settings
 from altcoin_trend.db import build_engine
+from altcoin_trend.signals.trade_candidate import ULTRA_HIGH_CONVICTION_RULE
 from altcoin_trend.trade_backtest import _coerce_utc_datetime, _prepare_feature_frame, compute_forward_path_labels
 
 DEFAULT_OUTPUT_ROOT = "artifacts/autoresearch"
@@ -32,6 +33,87 @@ def _window_slug(value: datetime) -> str:
 def _parse_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return _coerce_utc_datetime(parsed)
+
+
+def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(float("nan"), index=frame.index, dtype="float64")
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _has_veto_reason_codes(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set)):
+        return any(str(item).strip() for item in value)
+    return bool(value)
+
+
+def summarize_ultra_gate_flow(window: pd.DataFrame) -> dict[str, int]:
+    if window.empty:
+        return {
+            "window_feature_rows": 0,
+            "pass_no_veto": 0,
+            "pass_breakout_20d": 0,
+            "pass_1h_range": 0,
+            "pass_4h_range": 0,
+            "pass_24h_momentum": 0,
+            "pass_30d_return": 0,
+            "pass_volume_ratio_24h_range": 0,
+            "pass_top_24h_rank_gate": 0,
+            "pass_7d_strength_gate": 0,
+            "pass_30d_strength_gate": 0,
+            "pass_quality_gate": 0,
+        }
+
+    rule = ULTRA_HIGH_CONVICTION_RULE
+    return_1h_pct = _numeric_series(window, "return_1h_pct")
+    return_4h_pct = _numeric_series(window, "return_4h_pct")
+    return_24h_pct = _numeric_series(window, "return_24h_pct")
+    return_30d_pct = _numeric_series(window, "return_30d_pct")
+    volume_ratio_24h = _numeric_series(window, "volume_ratio_24h")
+    return_24h_rank = _numeric_series(window, "return_24h_rank")
+    return_24h_percentile = _numeric_series(window, "return_24h_percentile")
+    return_7d_percentile = _numeric_series(window, "return_7d_percentile")
+    return_30d_percentile = _numeric_series(window, "return_30d_percentile")
+    quality_score = _numeric_series(window, "quality_score")
+
+    veto_reason_codes = window["veto_reason_codes"].apply(_has_veto_reason_codes) if "veto_reason_codes" in window.columns else pd.Series(False, index=window.index)
+    breakout_20d = window["breakout_20d"].fillna(False).astype(bool) if "breakout_20d" in window.columns else pd.Series(False, index=window.index)
+
+    top_24h_rank_gate = (
+        (return_24h_rank.notna() & return_24h_rank.le(rule.max_return_24h_rank))
+        | (return_24h_rank.isna() & return_24h_percentile.ge(rule.min_return_24h_percentile))
+    )
+
+    pass_no_veto = ~veto_reason_codes
+    pass_breakout_20d = pass_no_veto & breakout_20d
+    pass_1h_range = pass_breakout_20d & return_1h_pct.ge(rule.min_return_1h_pct) & return_1h_pct.le(rule.max_return_1h_pct)
+    pass_4h_range = pass_1h_range & return_4h_pct.ge(rule.min_return_4h_pct) & return_4h_pct.le(rule.max_return_4h_pct)
+    pass_24h_momentum = pass_4h_range & return_24h_pct.ge(rule.min_return_24h_pct)
+    pass_30d_return = pass_24h_momentum & return_30d_pct.ge(rule.min_return_30d_pct)
+    pass_volume_ratio_24h_range = pass_30d_return & volume_ratio_24h.ge(rule.min_volume_ratio_24h) & volume_ratio_24h.le(rule.max_volume_ratio_24h)
+    pass_top_24h_rank_gate = pass_volume_ratio_24h_range & top_24h_rank_gate
+    pass_7d_strength_gate = pass_top_24h_rank_gate & return_7d_percentile.ge(rule.min_return_7d_percentile)
+    pass_30d_strength_gate = pass_7d_strength_gate & return_30d_percentile.ge(rule.min_return_30d_percentile)
+    pass_quality_gate = pass_30d_strength_gate & quality_score.ge(rule.min_quality_score)
+
+    return {
+        "window_feature_rows": int(len(window)),
+        "pass_no_veto": int(pass_no_veto.sum()),
+        "pass_breakout_20d": int(pass_breakout_20d.sum()),
+        "pass_1h_range": int(pass_1h_range.sum()),
+        "pass_4h_range": int(pass_4h_range.sum()),
+        "pass_24h_momentum": int(pass_24h_momentum.sum()),
+        "pass_30d_return": int(pass_30d_return.sum()),
+        "pass_volume_ratio_24h_range": int(pass_volume_ratio_24h_range.sum()),
+        "pass_top_24h_rank_gate": int(pass_top_24h_rank_gate.sum()),
+        "pass_7d_strength_gate": int(pass_7d_strength_gate.sum()),
+        "pass_30d_strength_gate": int(pass_30d_strength_gate.sum()),
+        "pass_quality_gate": int(pass_quality_gate.sum()),
+    }
 
 
 def fetch_hourly_bars(engine: Engine, exchange: str, start: datetime, end: datetime) -> pd.DataFrame:
@@ -106,6 +188,7 @@ def evaluate_ultra_signals(
             "to": end_utc.isoformat(),
             "hourly_rows": 0,
             "feature_rows": 0,
+            "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()),
             "ultra_signal_count": 0,
             "hit_10_1h_count": 0,
             "hit_10_4h_count": 0,
@@ -119,6 +202,7 @@ def evaluate_ultra_signals(
 
     features = _prepare_feature_frame(hourly)
     window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
+    gate_flow = summarize_ultra_gate_flow(window)
     signals = window[window["ultra_high_conviction"].fillna(False).eq(True)].copy()
 
     evaluated: list[dict[str, Any]] = []
@@ -169,6 +253,7 @@ def evaluate_ultra_signals(
         "market_to": market_end.isoformat(),
         "hourly_rows": int(len(hourly)),
         "feature_rows": int(len(features)),
+        "gate_flow": gate_flow,
         "ultra_signal_count": signal_count,
         "hit_10_1h_count": hit_1h_count,
         "hit_10_4h_count": hit_4h_count,
@@ -284,6 +369,15 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
             f"- precision_4h: {summary['precision_4h']}",
             f"- precision_24h: {summary['precision_24h']}",
             f"- precision_before_dd8: {summary['precision_before_dd8']}",
+            "",
+            "## Gate Flow",
+            "",
+            f"- window_feature_rows: {summary.get('gate_flow', {}).get('window_feature_rows', 0)}",
+            f"- pass_top_24h_rank_gate: {summary.get('gate_flow', {}).get('pass_top_24h_rank_gate', 0)}",
+            f"- pass_7d_strength_gate: {summary.get('gate_flow', {}).get('pass_7d_strength_gate', 0)}",
+            f"- pass_30d_strength_gate: {summary.get('gate_flow', {}).get('pass_30d_strength_gate', 0)}",
+            f"- pass_1h_range: {summary.get('gate_flow', {}).get('pass_1h_range', 0)}",
+            f"- pass_quality_gate: {summary.get('gate_flow', {}).get('pass_quality_gate', 0)}",
             "",
         ]
     )

@@ -319,7 +319,7 @@ def is_ultra_high_conviction_candidate(row):
         and row["volume_ratio_24h"] >= 5
         and row["volume_ratio_24h"] <= 10
         and (
-            row["return_24h_rank"] <= 3
+            row["return_24h_rank"] <= 5
             if row.get("return_24h_rank") is not None
             else row["return_24h_percentile"] >= 0.999
         )
@@ -337,7 +337,7 @@ def is_ultra_high_conviction_candidate(row):
   - 要求 `1h >= 12%`、`4h >= 38%`、`24h >= 50%`，确保不是“慢趋势普通强势”，而是明显的强冲段。
   - 同时限制 `1h <= 40%`、`4h <= 110%`，避免把已经过度拉升、极易形成 chase risk 的标的继续标成高置信。
 - top-24h rank requirement：
-  - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 3`。
+  - 如果生产特征里有 `return_24h_rank`，必须是交易所横截面 `top 5`。
   - 只有在 rank 缺失时，才回退到 `return_24h_percentile >= 0.999` 作为研究近似。
 - 7d / 30d strength：
   - `return_7d_percentile >= 0.988`
@@ -371,6 +371,7 @@ def is_ultra_high_conviction_candidate(row):
 固定输出：
 
 - `summary.json`
+  - 现在额外包含 `gate_flow`，用于显示各道 ultra gate 的累计通过数量
 - `signals.csv`
 - `metadata.json`
 - `README.md`
@@ -387,12 +388,83 @@ artifacts/autoresearch/<generated-at>-production-ultra-<exchange>-<from>-<to>
 2026-01-22T10:00:00+00:00 -> 2026-04-22T10:00:00+00:00
 ```
 
-2026-04-23 最近一轮验证结果：
+2026-04-24 固定窗口 baseline 结果：
+
+Validation window:
+
+```text
+7d:  2026-04-15T00:00:00+00:00 -> 2026-04-22T00:00:00+00:00
+30d: 2026-03-23T00:00:00+00:00 -> 2026-04-22T00:00:00+00:00
+```
+
+7d smoke:
+
+| Exchange | Signals | 24h +10% Precision | +10% before -8% DD |
+|---|---:|---:|---:|
+| `binance` | 2 | 100.00% | 50.00% |
+| `bybit` | 1 | 100.00% | 100.00% |
+
+30d baseline:
 
 | Exchange | Signals | 1h +10% Precision | 4h +10% Precision | 24h +10% Precision | +10% before -8% DD |
 |---|---:|---:|---:|---:|---:|
-| `binance` | 4 | 100.00% | 100.00% | 100.00% | 50.00% |
-| `bybit` | 2 | 100.00% | 100.00% | 100.00% | 100.00% |
+| `binance` | 3 | 100.00% | 100.00% | 100.00% | 33.33% |
+| `bybit` | 1 | 100.00% | 100.00% | 100.00% | 100.00% |
+
+合并后：
+
+- `ultra_signal_count=4`
+- `precision_24h=1.0`
+- `precision_before_dd8=0.5`
+- `combined_avg_mfe_24h_pct=52.981898`
+- `combined_avg_mae_24h_pct=43.487917`
+
+按固定门槛，这一轮不是 freeze，而是黄色区间：样本数仍然只有 `4`，且 24h MAE 明显高于 `8%` 上限。
+
+2026-04-24 单门调参与诊断结果：
+
+- 先把 `top-24h rank` 从 `top 3` 放松到 `top 5`
+- 用同一个 30 天窗口重跑后，Binance 仍然是 `3` 条，Bybit 仍然是 `1` 条
+- 这说明当前样本瓶颈不是 rank gate 本身
+
+30d `gate_flow` 诊断：
+
+```text
+binance:
+window_feature_rows=56115
+pass_breakout_20d=393
+pass_1h_range=51
+pass_24h_momentum=16
+pass_30d_return=14
+pass_volume_ratio_24h_range=8
+pass_top_24h_rank_gate=8
+pass_7d_strength_gate=3
+pass_30d_strength_gate=3
+pass_quality_gate=3
+
+bybit:
+window_feature_rows=55835
+pass_breakout_20d=391
+pass_1h_range=48
+pass_24h_momentum=14
+pass_30d_return=12
+pass_volume_ratio_24h_range=7
+pass_top_24h_rank_gate=7
+pass_7d_strength_gate=1
+pass_30d_strength_gate=1
+pass_quality_gate=1
+```
+
+这组诊断说明：
+
+- `top-24h rank` 不是当前的主要杀样本门，放松后没有带来任何新增信号
+- 真正的大幅压缩先发生在 `breakout_20d` 与 `1h range`
+- 在进入 ultra 窄集合后，`7d / 30d strength` 仍然会把候选继续压缩到最终 `3 + 1`
+
+下一步应该优先考虑：
+
+- 先评估是否要放松 `7d / 30d strength` 或 `breakout_20d`
+- 不要再继续盲放 `top-24h rank`
 
 命令示例：
 

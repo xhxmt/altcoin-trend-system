@@ -111,7 +111,8 @@ def test_ultra_high_conviction_candidate_accepts_research_rule_shape():
 
 def test_ultra_high_conviction_candidate_requires_top_24h_rank_when_present():
     assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=3, return_24h_percentile=0.80)) is True
-    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=4, return_24h_percentile=0.999)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=5, return_24h_percentile=0.80)) is True
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=6, return_24h_percentile=0.999)) is False
 
 
 def test_ultra_high_conviction_candidate_falls_back_to_percentile_when_rank_missing():
@@ -132,7 +133,7 @@ def test_ultra_high_conviction_candidate_rejects_overextended_or_unconfirmed_row
     assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=4.9)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(volume_ratio_24h=10.1)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_percentile=0.998)) is False
-    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=4)) is False
+    assert is_ultra_high_conviction_candidate(_ultra_row(return_24h_rank=6)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_7d_percentile=0.987)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(return_30d_percentile=0.79)) is False
     assert is_ultra_high_conviction_candidate(_ultra_row(quality_score=79.9)) is False

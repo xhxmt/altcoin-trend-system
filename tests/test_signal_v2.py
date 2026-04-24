@@ -77,12 +77,13 @@ def _continuation_row(**overrides):
 def _ignition_row(**overrides):
     row = {
         "return_1h_pct": 8.1,
+        "return_4h_pct": 20.0,
         "return_24h_pct": 25.1,
         "return_24h_rank": 3,
         "return_24h_percentile": 0.80,
         "relative_strength_score": 86.0,
         "quality_score": 100.0,
-        "volume_ratio_24h": 1.9,
+        "volume_ratio_24h": 3.1,
         "volume_impulse_score": 20.0,
         "volume_breakout_score": 20.0,
         "derivatives_score": 30.0,
@@ -138,6 +139,7 @@ def test_ignition_grade_orders_extreme_before_a_before_b():
     assert ignition_grade(
         _ignition_row(
             return_1h_pct=10.1,
+            return_4h_pct=40.1,
             return_24h_pct=35.1,
             relative_strength_score=91.0,
             quality_score=86.0,
@@ -148,6 +150,7 @@ def test_ignition_grade_orders_extreme_before_a_before_b():
     assert ignition_grade(
         _ignition_row(
             return_1h_pct=20.1,
+            return_4h_pct=55.0,
             return_24h_pct=70.1,
             return_24h_percentile=0.95,
             relative_strength_score=91.0,
@@ -155,6 +158,25 @@ def test_ignition_grade_orders_extreme_before_a_before_b():
             derivatives_score=25.0,
         )
     ) == "EXTREME"
+
+
+def test_ignition_a_requires_4h_follow_through():
+    assert ignition_grade(
+        _ignition_row(
+            return_1h_pct=10.1,
+            return_4h_pct=39.9,
+            return_24h_pct=35.1,
+            relative_strength_score=91.0,
+            quality_score=86.0,
+            volume_impulse_score=46.0,
+            derivatives_score=35.0,
+        )
+    ) == "B"
+
+
+def test_ignition_b_requires_stronger_volume_confirmation():
+    assert ignition_grade(_ignition_row(volume_ratio_24h=2.9, volume_breakout_score=59.9, volume_impulse_score=59.9)) is None
+    assert ignition_grade(_ignition_row(volume_ratio_24h=2.9, volume_breakout_score=60.0, volume_impulse_score=60.0)) == "B"
 
 
 def test_ignition_grade_accepts_rank_without_percentile():

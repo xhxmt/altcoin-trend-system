@@ -13,13 +13,120 @@ from sqlalchemy import Engine, text
 from altcoin_trend.config import load_settings
 from altcoin_trend.db import build_engine
 from altcoin_trend.signals.trade_candidate import ULTRA_HIGH_CONVICTION_RULE
-from altcoin_trend.trade_backtest import _coerce_utc_datetime, _prepare_feature_frame, compute_forward_path_labels
+from altcoin_trend.trade_backtest import (
+    _coerce_utc_datetime,
+    _prepare_feature_frame,
+    compute_forward_path_labels,
+    summarize_signal_v2_groups,
+)
 
 DEFAULT_OUTPUT_ROOT = "artifacts/autoresearch"
 SUMMARY_FILENAME = "summary.json"
 SIGNALS_FILENAME = "signals.csv"
 METADATA_FILENAME = "metadata.json"
 README_FILENAME = "README.md"
+
+SIGNAL_FAMILY_CONFIGS: dict[str, dict[str, Any]] = {
+    "ultra_high_conviction": {
+        "slug": "ultra",
+        "title": "Ultra High Conviction",
+        "count_key": "ultra_signal_count",
+        "required_features": [
+            "return_1h_pct",
+            "return_4h_pct",
+            "return_24h_pct",
+            "return_30d_pct",
+            "volume_ratio_24h",
+            "return_24h_rank",
+            "return_24h_percentile",
+            "return_7d_percentile",
+            "return_30d_percentile",
+            "quality_score",
+            "breakout_20d",
+            "ultra_high_conviction",
+        ],
+    },
+    "ignition": {
+        "slug": "ignition",
+        "title": "Ignition",
+        "count_key": "ignition_signal_count",
+        "required_features": [
+            "return_1h_pct",
+            "return_4h_pct",
+            "return_24h_pct",
+            "return_24h_rank",
+            "return_24h_percentile",
+            "relative_strength_score",
+            "quality_score",
+            "volume_ratio_24h",
+            "volume_breakout_score",
+            "derivatives_score",
+            "ignition_grade",
+            "chase_risk_score",
+            "risk_flags",
+        ],
+    },
+    "ignition_A": {
+        "slug": "ignition-a",
+        "title": "Ignition A",
+        "count_key": "ignition_a_signal_count",
+        "required_features": [
+            "return_1h_pct",
+            "return_4h_pct",
+            "return_24h_pct",
+            "return_24h_rank",
+            "return_24h_percentile",
+            "relative_strength_score",
+            "quality_score",
+            "volume_ratio_24h",
+            "volume_breakout_score",
+            "derivatives_score",
+            "ignition_grade",
+            "chase_risk_score",
+            "risk_flags",
+        ],
+    },
+    "ignition_B": {
+        "slug": "ignition-b",
+        "title": "Ignition B",
+        "count_key": "ignition_b_signal_count",
+        "required_features": [
+            "return_1h_pct",
+            "return_4h_pct",
+            "return_24h_pct",
+            "return_24h_rank",
+            "return_24h_percentile",
+            "relative_strength_score",
+            "quality_score",
+            "volume_ratio_24h",
+            "volume_breakout_score",
+            "derivatives_score",
+            "ignition_grade",
+            "chase_risk_score",
+            "risk_flags",
+        ],
+    },
+    "ignition_EXTREME": {
+        "slug": "ignition-extreme",
+        "title": "Ignition EXTREME",
+        "count_key": "ignition_extreme_signal_count",
+        "required_features": [
+            "return_1h_pct",
+            "return_4h_pct",
+            "return_24h_pct",
+            "return_24h_rank",
+            "return_24h_percentile",
+            "relative_strength_score",
+            "quality_score",
+            "volume_ratio_24h",
+            "volume_breakout_score",
+            "derivatives_score",
+            "ignition_grade",
+            "chase_risk_score",
+            "risk_flags",
+        ],
+    },
+}
 
 
 def _utc_slug() -> str:
@@ -33,6 +140,32 @@ def _window_slug(value: datetime) -> str:
 def _parse_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return _coerce_utc_datetime(parsed)
+
+
+def _normalize_signal_family(value: str) -> str:
+    normalized = value.strip()
+    if normalized == "ultra":
+        normalized = "ultra_high_conviction"
+    if normalized not in SIGNAL_FAMILY_CONFIGS:
+        supported = ", ".join(sorted(SIGNAL_FAMILY_CONFIGS))
+        raise ValueError(f"unsupported signal family: {value}. supported values: {supported}")
+    return normalized
+
+
+def _signal_family_slug(signal_family: str) -> str:
+    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["slug"])
+
+
+def _signal_family_title(signal_family: str) -> str:
+    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["title"])
+
+
+def _signal_count_key(signal_family: str) -> str:
+    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["count_key"])
+
+
+def _required_features(signal_family: str) -> list[str]:
+    return list(SIGNAL_FAMILY_CONFIGS[signal_family]["required_features"])
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -65,7 +198,30 @@ def _median_numeric(values: list[Any]) -> float:
     return round(float(series.median()), 6)
 
 
-def summarize_evaluated_signals(evaluated: list[dict[str, Any]]) -> dict[str, Any]:
+def _optional_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(numeric) else numeric
+
+
+def _select_signal_rows(window: pd.DataFrame, signal_family: str) -> pd.DataFrame:
+    if signal_family == "ultra_high_conviction":
+        return window[window["ultra_high_conviction"].fillna(False).eq(True)].copy()
+    if signal_family == "ignition":
+        return window[window["ignition_grade"].notna()].copy()
+    if signal_family.startswith("ignition_"):
+        grade = signal_family.split("_", 1)[1]
+        return window[window["ignition_grade"].fillna("").astype(str).eq(grade)].copy()
+    raise ValueError(f"unsupported signal family: {signal_family}")
+
+
+def summarize_evaluated_signals(
+    evaluated: list[dict[str, Any]],
+    *,
+    signal_family: str = "ultra_high_conviction",
+) -> dict[str, Any]:
     signal_count = len(evaluated)
     hit_1h_count = sum(1 for row in evaluated if row.get("hit_10pct_1h"))
     hit_4h_count = sum(1 for row in evaluated if row.get("hit_10pct_4h"))
@@ -79,8 +235,11 @@ def summarize_evaluated_signals(evaluated: list[dict[str, Any]]) -> dict[str, An
         if row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None
     )
 
+    count_key = _signal_count_key(signal_family)
     return {
-        "ultra_signal_count": signal_count,
+        "signal_family": signal_family,
+        "signal_count": signal_count,
+        count_key: signal_count,
         "hit_10_1h_count": hit_1h_count,
         "hit_10_4h_count": hit_4h_count,
         "hit_10_24h_count": hit_24h_count,
@@ -250,12 +409,15 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, signal_ts: datetime, ho
     return pd.DataFrame(rows)
 
 
-def evaluate_ultra_signals(
+def evaluate_signal_family(
     engine: Engine,
     exchange: str,
     start: datetime,
     end: datetime,
+    *,
+    signal_family: str = "ultra_high_conviction",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    signal_family = _normalize_signal_family(signal_family)
     start_utc = _coerce_utc_datetime(start)
     end_utc = _coerce_utc_datetime(end)
     if start_utc >= end_utc:
@@ -266,19 +428,21 @@ def evaluate_ultra_signals(
     hourly = fetch_hourly_bars(engine, exchange=exchange, start=market_start, end=market_end)
     if hourly.empty:
         return {
+            "signal_family": signal_family,
             "exchange": exchange,
             "from": start_utc.isoformat(),
             "to": end_utc.isoformat(),
             "hourly_rows": 0,
             "feature_rows": 0,
-            "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()),
-            **summarize_evaluated_signals([]),
+            "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
+            "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
+            **summarize_evaluated_signals([], signal_family=signal_family),
         }, []
 
     features = _prepare_feature_frame(hourly)
     window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
-    gate_flow = summarize_ultra_gate_flow(window)
-    signals = window[window["ultra_high_conviction"].fillna(False).eq(True)].copy()
+    gate_flow = summarize_ultra_gate_flow(window) if signal_family == "ultra_high_conviction" else {}
+    signals = _select_signal_rows(window, signal_family)
 
     evaluated: list[dict[str, Any]] = []
     for row in signals.sort_values(["ts", "symbol"]).to_dict("records"):
@@ -292,15 +456,26 @@ def evaluate_ultra_signals(
                 "exchange": row["exchange"],
                 "symbol": row["symbol"],
                 "close": float(row["close"]),
+                "continuation_grade": row.get("continuation_grade"),
+                "ignition_grade": row.get("ignition_grade"),
+                "ultra_high_conviction": bool(row.get("ultra_high_conviction", False)),
+                "signal_priority": int(row["signal_priority"]) if _optional_float(row.get("signal_priority")) is not None else None,
                 "return_1h_pct": float(row["return_1h_pct"]),
                 "return_4h_pct": float(row["return_4h_pct"]),
                 "return_24h_pct": float(row["return_24h_pct"]),
                 "return_7d_pct": float(row["return_7d_pct"]),
                 "return_30d_pct": float(row["return_30d_pct"]),
                 "volume_ratio_24h": float(row["volume_ratio_24h"]),
-                "return_24h_percentile": float(row["return_24h_percentile"]),
-                "return_7d_percentile": float(row["return_7d_percentile"]),
-                "return_30d_percentile": float(row["return_30d_percentile"]),
+                "volume_breakout_score": _optional_float(row.get("volume_breakout_score")),
+                "relative_strength_score": _optional_float(row.get("relative_strength_score")),
+                "derivatives_score": _optional_float(row.get("derivatives_score")),
+                "quality_score": _optional_float(row.get("quality_score")),
+                "chase_risk_score": _optional_float(row.get("chase_risk_score")),
+                "return_24h_rank": _optional_float(row.get("return_24h_rank")),
+                "return_24h_percentile": _optional_float(row.get("return_24h_percentile")),
+                "return_7d_percentile": _optional_float(row.get("return_7d_percentile")),
+                "return_30d_percentile": _optional_float(row.get("return_30d_percentile")),
+                "risk_flags": list(row.get("risk_flags", ())),
                 "mfe_1h_pct": labels["mfe_1h_pct"],
                 "mfe_4h_pct": labels["mfe_4h_pct"],
                 "mfe_24h_pct": labels["mfe_24h_pct"],
@@ -321,7 +496,9 @@ def evaluate_ultra_signals(
             }
         )
 
+    evaluated_frame = pd.DataFrame(evaluated)
     summary = {
+        "signal_family": signal_family,
         "exchange": exchange,
         "from": start_utc.isoformat(),
         "to": end_utc.isoformat(),
@@ -330,9 +507,25 @@ def evaluate_ultra_signals(
         "hourly_rows": int(len(hourly)),
         "feature_rows": int(len(features)),
         "gate_flow": gate_flow,
-        **summarize_evaluated_signals(evaluated),
+        "group_summary": summarize_signal_v2_groups(evaluated_frame),
+        **summarize_evaluated_signals(evaluated, signal_family=signal_family),
     }
     return summary, evaluated
+
+
+def evaluate_ultra_signals(
+    engine: Engine,
+    exchange: str,
+    start: datetime,
+    end: datetime,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    return evaluate_signal_family(
+        engine,
+        exchange,
+        start,
+        end,
+        signal_family="ultra_high_conviction",
+    )
 
 
 def build_run_metadata(
@@ -344,12 +537,17 @@ def build_run_metadata(
     market_end: datetime,
     output_dir: Path,
     output_root: Path,
+    signal_family: str = "ultra_high_conviction",
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
+    signal_family = _normalize_signal_family(signal_family)
     generated = _coerce_utc_datetime(generated_at or datetime.now(timezone.utc))
     return {
         "script": "scripts/validate_ultra_signal_production.py",
         "generated_at": generated.isoformat(),
+        "signal_family": signal_family,
+        "signal_family_slug": _signal_family_slug(signal_family),
+        "signal_family_title": _signal_family_title(signal_family),
         "exchange": exchange,
         "validation_window": {
             "from": start.isoformat(),
@@ -366,20 +564,7 @@ def build_run_metadata(
         },
         "expected_inputs": {
             "database_tables": ["alt_core.market_1m"],
-            "required_features": [
-                "return_1h_pct",
-                "return_4h_pct",
-                "return_24h_pct",
-                "return_30d_pct",
-                "volume_ratio_24h",
-                "return_24h_rank",
-                "return_24h_percentile",
-                "return_7d_percentile",
-                "return_30d_percentile",
-                "quality_score",
-                "breakout_20d",
-                "ultra_high_conviction",
-            ],
+            "required_features": _required_features(signal_family),
         },
         "expected_outputs": {
             "summary": SUMMARY_FILENAME,
@@ -403,9 +588,9 @@ def build_run_metadata(
             "output_dir": str(output_dir),
         },
         "metrics": {
-            "precision_1h": "share of ultra_high_conviction rows hitting +10% MFE within 1h",
-            "precision_4h": "share of ultra_high_conviction rows hitting +10% MFE within 4h",
-            "precision_24h": "share of ultra_high_conviction rows hitting +10% MFE within 24h",
+            "precision_1h": f"share of {_signal_family_title(signal_family)} rows hitting +10% MFE within 1h",
+            "precision_4h": f"share of {_signal_family_title(signal_family)} rows hitting +10% MFE within 4h",
+            "precision_24h": f"share of {_signal_family_title(signal_family)} rows hitting +10% MFE within 24h",
             "precision_before_dd8": "share hitting +10% before any -8% drawdown",
             "avg_mfe_before_dd8_pct": "average max favorable excursion before the first -8% drawdown, or full 24h MFE if no -8% drawdown occurs",
             "avg_mae_before_hit_10pct": "average max adverse excursion before the first +10% hit, or full 24h MAE if +10% is never reached",
@@ -415,67 +600,107 @@ def build_run_metadata(
     }
 
 
+def _build_group_snapshot_lines(summary: dict[str, Any], signal_family: str) -> list[str]:
+    group_summary = summary.get("group_summary", {})
+    if not isinstance(group_summary, dict):
+        return []
+
+    lines: list[str] = []
+    if signal_family == "ignition":
+        for key in ("ignition_EXTREME", "ignition_A", "ignition_B", "high_chase_risk", "low_or_medium_chase_risk"):
+            group = group_summary.get(key)
+            if not isinstance(group, dict):
+                continue
+            lines.append(
+                f"- {key}: count={int(group.get('signal_count', 0))}, "
+                f"hit_10_before_dd8={float(group.get('hit_10pct_before_drawdown_8pct_rate', 0.0)):.6f}, "
+                f"avg_mae_24h_pct={float(group.get('avg_mae_24h_pct', 0.0)):.6f}"
+            )
+    elif signal_family == "ultra_high_conviction":
+        group = group_summary.get("ultra_high_conviction")
+        if isinstance(group, dict):
+            lines.append(
+                f"- ultra_high_conviction: count={int(group.get('signal_count', 0))}, "
+                f"hit_10_before_dd8={float(group.get('hit_10pct_before_drawdown_8pct_rate', 0.0)):.6f}, "
+                f"avg_mae_24h_pct={float(group.get('avg_mae_24h_pct', 0.0)):.6f}"
+            )
+    return lines
+
+
 def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     window = metadata["validation_window"]
     warmup = metadata["warmup_window"]
     forward = metadata["forward_window"]
     outputs = metadata["expected_outputs"]
-    return "\n".join(
-        [
-            "# Ultra High Conviction Production Validation",
-            "",
-            f"- generated_at: {metadata['generated_at']}",
-            f"- exchange: {metadata['exchange']}",
-            f"- validation_window: {window['from']} -> {window['to']}",
-            f"- warmup_window: {warmup['from']} -> {warmup['to']}",
-            f"- forward_window: {forward['from']} -> {forward['to']} ({forward['horizon']})",
-            "",
-            "## Expected Inputs",
-            "",
-            "- database table: alt_core.market_1m",
-            "- feature fields: return_1h_pct, return_4h_pct, return_24h_pct, return_30d_pct, volume_ratio_24h, return_24h_rank, return_24h_percentile, return_7d_percentile, return_30d_percentile, quality_score, breakout_20d, ultra_high_conviction",
-            "",
-            "## Outputs",
-            "",
-            f"- {outputs['summary']}: aggregate hit-rate and drawdown summary",
-            f"- {outputs['signals']}: per-signal evaluation rows",
-            f"- {outputs['metadata']}: reproducibility manifest for this run",
-            f"- {outputs['readme']}: human-readable run contract",
-            "",
-            "## Snapshot",
-            "",
-            f"- ultra_signal_count: {summary['ultra_signal_count']}",
-            f"- precision_1h: {summary['precision_1h']}",
-            f"- precision_4h: {summary['precision_4h']}",
-            f"- precision_24h: {summary['precision_24h']}",
-            f"- precision_before_dd8: {summary['precision_before_dd8']}",
-            f"- hit_10pct_first_rate: {summary['hit_10pct_first_rate']}",
-            f"- drawdown_8pct_first_rate: {summary['drawdown_8pct_first_rate']}",
-            f"- avg_mfe_24h_pct: {summary['avg_mfe_24h_pct']}",
-            f"- avg_mae_24h_pct: {summary['avg_mae_24h_pct']}",
-            f"- avg_mfe_before_dd8_pct: {summary['avg_mfe_before_dd8_pct']}",
-            f"- avg_mae_before_hit_10pct: {summary['avg_mae_before_hit_10pct']}",
-            f"- avg_mae_after_hit_10pct: {summary['avg_mae_after_hit_10pct']}",
-            f"- median_time_to_hit_10pct_minutes: {summary['median_time_to_hit_10pct_minutes']}",
-            f"- median_time_to_drawdown_8pct_minutes: {summary['median_time_to_drawdown_8pct_minutes']}",
-            "",
-            "## Gate Flow",
-            "",
-            f"- window_feature_rows: {summary.get('gate_flow', {}).get('window_feature_rows', 0)}",
-            f"- pass_20d_breakout: {summary.get('gate_flow', {}).get('pass_20d_breakout', 0)}",
-            f"- pass_min_return_1h: {summary.get('gate_flow', {}).get('pass_min_return_1h', 0)}",
-            f"- pass_max_return_1h: {summary.get('gate_flow', {}).get('pass_max_return_1h', 0)}",
-            f"- pass_min_return_4h: {summary.get('gate_flow', {}).get('pass_min_return_4h', 0)}",
-            f"- pass_max_return_4h: {summary.get('gate_flow', {}).get('pass_max_return_4h', 0)}",
-            f"- pass_min_return_24h: {summary.get('gate_flow', {}).get('pass_min_return_24h', 0)}",
-            f"- pass_rank_24h: {summary.get('gate_flow', {}).get('pass_rank_24h', 0)}",
-            f"- pass_rs_7d: {summary.get('gate_flow', {}).get('pass_rs_7d', 0)}",
-            f"- pass_rs_30d: {summary.get('gate_flow', {}).get('pass_rs_30d', 0)}",
-            f"- pass_quality_gate: {summary.get('gate_flow', {}).get('pass_quality_gate', 0)}",
-            f"- final_ultra_signal_count: {summary.get('gate_flow', {}).get('final_ultra_signal_count', 0)}",
-            "",
-        ]
-    )
+    signal_family = _normalize_signal_family(str(metadata.get("signal_family", "ultra_high_conviction")))
+    count_key = _signal_count_key(signal_family)
+    count_value = summary.get(count_key, summary.get("signal_count", 0))
+    lines = [
+        f"# {_signal_family_title(signal_family)} Production Validation",
+        "",
+        f"- generated_at: {metadata['generated_at']}",
+        f"- signal_family: {signal_family}",
+        f"- exchange: {metadata['exchange']}",
+        f"- validation_window: {window['from']} -> {window['to']}",
+        f"- warmup_window: {warmup['from']} -> {warmup['to']}",
+        f"- forward_window: {forward['from']} -> {forward['to']} ({forward['horizon']})",
+        "",
+        "## Expected Inputs",
+        "",
+        "- database table: alt_core.market_1m",
+        f"- feature fields: {', '.join(metadata['expected_inputs']['required_features'])}",
+        "",
+        "## Outputs",
+        "",
+        f"- {outputs['summary']}: aggregate hit-rate and drawdown summary",
+        f"- {outputs['signals']}: per-signal evaluation rows",
+        f"- {outputs['metadata']}: reproducibility manifest for this run",
+        f"- {outputs['readme']}: human-readable run contract",
+        "",
+        "## Snapshot",
+        "",
+        f"- {count_key}: {count_value}",
+        f"- signal_count: {summary.get('signal_count', count_value)}",
+        f"- precision_1h: {summary['precision_1h']}",
+        f"- precision_4h: {summary['precision_4h']}",
+        f"- precision_24h: {summary['precision_24h']}",
+        f"- precision_before_dd8: {summary['precision_before_dd8']}",
+        f"- hit_10pct_first_rate: {summary['hit_10pct_first_rate']}",
+        f"- drawdown_8pct_first_rate: {summary['drawdown_8pct_first_rate']}",
+        f"- avg_mfe_24h_pct: {summary['avg_mfe_24h_pct']}",
+        f"- avg_mae_24h_pct: {summary['avg_mae_24h_pct']}",
+        f"- avg_mfe_before_dd8_pct: {summary['avg_mfe_before_dd8_pct']}",
+        f"- avg_mae_before_hit_10pct: {summary['avg_mae_before_hit_10pct']}",
+        f"- avg_mae_after_hit_10pct: {summary['avg_mae_after_hit_10pct']}",
+        f"- median_time_to_hit_10pct_minutes: {summary['median_time_to_hit_10pct_minutes']}",
+        f"- median_time_to_drawdown_8pct_minutes: {summary['median_time_to_drawdown_8pct_minutes']}",
+        "",
+    ]
+    group_snapshot_lines = _build_group_snapshot_lines(summary, signal_family)
+    if group_snapshot_lines:
+        lines.extend(["## Group Snapshot", "", *group_snapshot_lines, ""])
+    gate_flow = summary.get("gate_flow", {})
+    if gate_flow:
+        lines.extend(
+            [
+                "## Gate Flow",
+                "",
+                f"- window_feature_rows: {gate_flow.get('window_feature_rows', 0)}",
+                f"- pass_20d_breakout: {gate_flow.get('pass_20d_breakout', 0)}",
+                f"- pass_min_return_1h: {gate_flow.get('pass_min_return_1h', 0)}",
+                f"- pass_max_return_1h: {gate_flow.get('pass_max_return_1h', 0)}",
+                f"- pass_min_return_4h: {gate_flow.get('pass_min_return_4h', 0)}",
+                f"- pass_max_return_4h: {gate_flow.get('pass_max_return_4h', 0)}",
+                f"- pass_min_return_24h: {gate_flow.get('pass_min_return_24h', 0)}",
+                f"- pass_rank_24h: {gate_flow.get('pass_rank_24h', 0)}",
+                f"- pass_rs_7d: {gate_flow.get('pass_rs_7d', 0)}",
+                f"- pass_rs_30d: {gate_flow.get('pass_rs_30d', 0)}",
+                f"- pass_quality_gate: {gate_flow.get('pass_quality_gate', 0)}",
+                f"- final_ultra_signal_count: {gate_flow.get('final_ultra_signal_count', 0)}",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
@@ -497,6 +722,7 @@ def main() -> int:
     parser.add_argument("--from", dest="start", required=True)
     parser.add_argument("--to", dest="end", required=True)
     parser.add_argument("--exchange", default="binance")
+    parser.add_argument("--signal-family", default="ultra_high_conviction")
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
@@ -504,10 +730,11 @@ def main() -> int:
     engine = build_engine(settings)
     start = _parse_datetime(args.start)
     end = _parse_datetime(args.end)
-    summary, rows = evaluate_ultra_signals(engine, args.exchange, start, end)
+    signal_family = _normalize_signal_family(args.signal_family)
+    summary, rows = evaluate_signal_family(engine, args.exchange, start, end, signal_family=signal_family)
     output_root = Path(args.output_root)
     output_dir = output_root / (
-        f"{_utc_slug()}-production-ultra-{args.exchange}-{_window_slug(start)}-{_window_slug(end)}"
+        f"{_utc_slug()}-production-{_signal_family_slug(signal_family)}-{args.exchange}-{_window_slug(start)}-{_window_slug(end)}"
     )
     metadata = build_run_metadata(
         exchange=args.exchange,
@@ -517,6 +744,7 @@ def main() -> int:
         market_end=_parse_datetime(summary["market_to"]),
         output_dir=output_dir,
         output_root=output_root,
+        signal_family=signal_family,
     )
     write_artifacts(output_dir, summary, rows, metadata)
     print(f"output_dir={output_dir}")

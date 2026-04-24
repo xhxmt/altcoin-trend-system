@@ -236,6 +236,36 @@ def is_ignition_candidate(row):
 - RAVE 这类短期极端爆发行情。
 - EDU、SUPER 这类主策略可能较晚识别的启动行情。
 
+当前 Signal v2 的生产分级进一步收紧为：
+
+- `ignition_EXTREME`
+  - `1h >= 20`
+  - `24h >= 70`
+  - `top-24h`
+  - `relative_strength_score >= 90`
+  - `quality_score >= 80`
+  - `volume_ratio_24h >= 1.5` 或 `volume_impulse / breakout_score >= 35`
+- `ignition_A`
+  - `1h >= 10`
+  - `4h >= 40`
+  - `24h >= 35`
+  - `top-24h`
+  - `relative_strength_score >= 90`
+  - `quality_score >= 85`
+  - `volume_ratio_24h >= 2.2` 或 `volume_impulse / breakout_score >= 45`
+- `ignition_B`
+  - `1h >= 8`
+  - `24h >= 25`
+  - `top-24h`
+  - `relative_strength_score >= 85`
+  - `quality_score >= 80`
+  - `volume_ratio_24h >= 3.0` 或 `volume_impulse / breakout_score >= 60`
+
+其中这次新增的核心限制有两条：
+
+- `ignition_A` 不再接受 `4h` 跟进明显不足的“半启动”信号。
+- `ignition_B` 的量能确认明显收紧，目的是减少“今天刚抬头，但还没有足够成交验证”的假启动。
+
 ## 9. Tier Override
 
 爆发通道不推翻原总分体系，只提供晋级通道：
@@ -359,7 +389,7 @@ def is_ultra_high_conviction_candidate(row):
 
 ## 12. Ultra 生产验证口径
 
-`scripts/validate_ultra_signal_production.py` 是当前的可复现评估 harness。它直接从 `alt_core.market_1m` 聚合小时线、重算生产特征、筛出 `ultra_high_conviction` 行，并对每个信号计算未来 1h / 4h / 24h 的路径标签。
+`scripts/validate_ultra_signal_production.py` 现在已经支持 `--signal-family`，可复用到 `ultra_high_conviction`、`ignition`、`ignition_A`、`ignition_B`、`ignition_EXTREME`。它直接从 `alt_core.market_1m` 聚合小时线、重算生产特征、筛出目标信号行，并对每个信号计算未来 1h / 4h / 24h 的路径标签。
 
 固定输入：
 
@@ -476,10 +506,25 @@ pass_quality_gate=1
 
 ```bash
 python scripts/validate_ultra_signal_production.py \
+  --signal-family ultra_high_conviction \
   --from 2026-01-22T10:00:00+00:00 \
   --to 2026-04-22T10:00:00+00:00 \
   --exchange binance
 ```
+
+同口径的 `ignition` 固定 30 天双交易所验证（`2026-03-23` 到 `2026-04-22`）在当前规则下得到：
+
+- Binance：`ignition_signal_count=103`，`hit_10_before_dd8_count=56`，`precision_before_dd8=0.543689`
+- Bybit：`ignition_signal_count=101`，`hit_10_before_dd8_count=56`，`precision_before_dd8=0.554455`
+- 合并后：`204` 个 ignition 信号中有 `112` 个在 `-8%` 回撤前先打到 `+10%`，加权 `precision_before_dd8=0.549020`
+
+对比这轮 ignition path-risk 优化前的同窗口 baseline：
+
+- Binance：`136` 条，`precision_before_dd8=0.514706`
+- Bybit：`127` 条，`precision_before_dd8=0.511811`
+- 合并后：`263` 条，`precision_before_dd8=0.513308`
+
+这说明当前 ignition 改动不是把样本压到接近 0，而是在仍保留 `200+` 样本的前提下，把严格 path-risk 精度从约 `51.3%` 提升到了约 `54.9%`。
 
 promotion / retention 口径：
 
@@ -549,11 +594,13 @@ promotion / retention 口径：
    - 这解释了 RAVE 原始 24h 量能约 2x，但 volume score 只有约 35-40 的现象。
    - 当前没有直接修改主 volume 公式，以避免影响 continuation 历史行为。
 
-2. `ignition` 精度低于主策略。
-   - 下一步可以测试更严格版本：
-     - `volume_ratio_24h >= 2.0`
-     - 或 `derivatives_score >= 40`
-     - 或增加信号后最大回撤过滤。
+2. `ignition` 仍然明显弱于 ultra / continuation。
+   - 这轮固定 30 天 path-risk 优化后，合并 `precision_before_dd8` 已从约 `51.3%` 提升到约 `54.9%`。
+   - 但它依然是“更早、覆盖更广、噪声更高”的通道，不应和 ultra 同等看待。
+   - 下一步更有价值的是：
+     - 跑更长固定窗口，验证这轮收紧是否稳定
+     - 补 `cross-exchange` 维度的 ignition path-risk 诊断
+     - 检查 `B` 档里剩余高回撤样本是否还集中在少数 symbol
 
 3. 当前 `ultra_high_conviction` 样本数虽然比初始 baseline 仍略高，但依然集中在少数极强走势上。
    - 固定 30 天窗口里当前是 `5` 个样本，比 baseline 的 `4` 个略有提升，但还不能把这次 `1.0` 的 path-risk precision 当成长期稳定结论。

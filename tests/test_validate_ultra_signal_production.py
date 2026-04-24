@@ -37,6 +37,7 @@ def test_build_run_metadata_captures_validation_contract(tmp_path):
         "from": "2026-01-22T10:00:00+00:00",
         "to": "2026-04-22T10:00:00+00:00",
     }
+    assert metadata["signal_family"] == "ultra_high_conviction"
     assert metadata["warmup_window"]["from"] == "2025-12-22T10:00:00+00:00"
     assert metadata["forward_window"]["to"] == "2026-04-23T11:00:00+00:00"
     assert metadata["expected_outputs"]["summary"] == SUMMARY_FILENAME
@@ -101,6 +102,7 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
     assert "avg_mae_before_hit_10pct: 7.25" in readme
     assert "pass_rank_24h: 0" in readme
     assert "pass_quality_gate: 4" in readme
+    assert "signal_family: ultra_high_conviction" in readme
 
 
 def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
@@ -329,3 +331,100 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
     assert summary["avg_mae_after_hit_10pct"] == 2.5
     assert summary["median_time_to_hit_10pct_minutes"] == 20.0
     assert summary["median_time_to_drawdown_8pct_minutes"] == 35.0
+
+
+def test_build_run_metadata_supports_ignition_family(tmp_path):
+    output_dir = tmp_path / "20260424-070000-production-ignition-binance"
+    metadata = build_run_metadata(
+        exchange="binance",
+        start=datetime(2026, 3, 23, 0, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 4, 22, 0, 0, tzinfo=timezone.utc),
+        market_start=datetime(2026, 2, 20, 0, 0, tzinfo=timezone.utc),
+        market_end=datetime(2026, 4, 23, 1, 0, tzinfo=timezone.utc),
+        output_dir=output_dir,
+        output_root=tmp_path,
+        signal_family="ignition",
+        generated_at=datetime(2026, 4, 24, 7, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert metadata["signal_family"] == "ignition"
+    assert metadata["signal_family_slug"] == "ignition"
+    assert "ignition_grade" in metadata["expected_inputs"]["required_features"]
+    assert "ultra_high_conviction" not in metadata["expected_inputs"]["required_features"]
+
+
+def test_build_run_readme_includes_ignition_group_snapshot(tmp_path):
+    output_dir = tmp_path / "run"
+    summary = {
+        "signal_family": "ignition",
+        "signal_count": 6,
+        "ignition_signal_count": 6,
+        "precision_1h": 0.5,
+        "precision_4h": 0.666667,
+        "precision_24h": 0.833333,
+        "precision_before_dd8": 0.333333,
+        "hit_10pct_first_rate": 0.333333,
+        "drawdown_8pct_first_rate": 0.5,
+        "avg_mfe_24h_pct": 20.0,
+        "avg_mae_24h_pct": 14.0,
+        "avg_mfe_before_dd8_pct": 9.0,
+        "avg_mae_before_hit_10pct": 7.0,
+        "avg_mae_after_hit_10pct": 4.0,
+        "median_time_to_hit_10pct_minutes": 45.0,
+        "median_time_to_drawdown_8pct_minutes": 20.0,
+        "group_summary": {
+            "ignition_EXTREME": {"signal_count": 1, "hit_10pct_before_drawdown_8pct_rate": 100.0, "avg_mae_24h_pct": 3.0},
+            "ignition_A": {"signal_count": 2, "hit_10pct_before_drawdown_8pct_rate": 50.0, "avg_mae_24h_pct": 8.0},
+            "ignition_B": {"signal_count": 3, "hit_10pct_before_drawdown_8pct_rate": 0.0, "avg_mae_24h_pct": 19.0},
+            "high_chase_risk": {"signal_count": 4, "hit_10pct_before_drawdown_8pct_rate": 25.0, "avg_mae_24h_pct": 16.0},
+            "low_or_medium_chase_risk": {"signal_count": 2, "hit_10pct_before_drawdown_8pct_rate": 50.0, "avg_mae_24h_pct": 10.0},
+        },
+        "gate_flow": {},
+    }
+    metadata = build_run_metadata(
+        exchange="binance",
+        start=datetime(2026, 3, 23, 0, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 4, 22, 0, 0, tzinfo=timezone.utc),
+        market_start=datetime(2026, 2, 20, 0, 0, tzinfo=timezone.utc),
+        market_end=datetime(2026, 4, 23, 1, 0, tzinfo=timezone.utc),
+        output_dir=output_dir,
+        output_root=tmp_path,
+        signal_family="ignition",
+        generated_at=datetime(2026, 4, 24, 7, 0, 0, tzinfo=timezone.utc),
+    )
+
+    write_artifacts(output_dir, summary, [], metadata)
+    readme = (output_dir / README_FILENAME).read_text(encoding="utf-8")
+    assert "# Ignition Production Validation" in readme
+    assert "signal_family: ignition" in readme
+    assert "ignition_signal_count: 6" in readme
+    assert "ignition_B: count=3, hit_10_before_dd8=0.000000, avg_mae_24h_pct=19.000000" in readme
+    assert "high_chase_risk: count=4, hit_10_before_dd8=25.000000, avg_mae_24h_pct=16.000000" in readme
+
+
+def test_summarize_evaluated_signals_adds_ignition_alias_count_key():
+    summary = summarize_evaluated_signals(
+        [
+            {
+                "hit_10pct_1h": True,
+                "hit_10pct_4h": True,
+                "hit_10pct_24h": True,
+                "hit_10pct_before_drawdown_8pct": True,
+                "hit_10pct_first": True,
+                "drawdown_8pct_first": False,
+                "mfe_1h_pct": 14.0,
+                "mfe_24h_pct": 25.0,
+                "mae_24h_pct": 4.0,
+                "mfe_before_dd8_pct": 14.0,
+                "mae_before_hit_10pct": 2.0,
+                "mae_after_hit_10pct": 1.0,
+                "time_to_hit_10pct_minutes": 15.0,
+                "time_to_drawdown_8pct_minutes": None,
+            }
+        ],
+        signal_family="ignition",
+    )
+
+    assert summary["signal_family"] == "ignition"
+    assert summary["signal_count"] == 1
+    assert summary["ignition_signal_count"] == 1

@@ -157,6 +157,7 @@ def ignition_grade(row: Mapping[str, Any] | Any) -> str | None:
         return None
 
     return_1h_pct = float_value(row, "return_1h_pct")
+    return_4h_pct = float_value(row, "return_4h_pct")
     return_24h_pct = float_value(row, "return_24h_pct")
     relative_strength_score = float_value(row, "relative_strength_score")
     quality_score = float_value(row, "quality_score")
@@ -165,6 +166,7 @@ def ignition_grade(row: Mapping[str, Any] | Any) -> str | None:
         value is None
         for value in (
             return_1h_pct,
+            return_4h_pct,
             return_24h_pct,
             relative_strength_score,
             quality_score,
@@ -187,6 +189,7 @@ def ignition_grade(row: Mapping[str, Any] | Any) -> str | None:
 
     if (
         return_1h_pct >= 10.0
+        and return_4h_pct >= 40.0
         and return_24h_pct >= 35.0
         and top_24h
         and relative_strength_score >= 90.0
@@ -202,7 +205,7 @@ def ignition_grade(row: Mapping[str, Any] | Any) -> str | None:
         and is_top_24h(row, max_rank=3, min_percentile=0.92)
         and relative_strength_score >= 85.0
         and quality_score >= 80.0
-        and _confirm_volume(row, ratio_min=1.8, impulse_min=45.0, breakout_min=35.0)
+        and _confirm_volume(row, ratio_min=3.0, impulse_min=60.0, breakout_min=60.0)
         and derivatives_score >= 30.0
     ):
         return IGNITION_B

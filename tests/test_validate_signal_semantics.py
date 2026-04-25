@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -128,3 +129,24 @@ def test_select_signal_rows_missing_selector_column_is_hard_error():
 
     with pytest.raises(ValueError, match="missing required columns"):
         _MODULE._select_signal_rows(frame, _MODULE.parse_signal_selector("continuation"))
+
+
+def test_hour_bucket_start_and_signal_available_at():
+    ts = pd.Timestamp("2026-04-22T10:37:15Z")
+
+    assert _MODULE.hour_bucket_start(ts).isoformat() == "2026-04-22T10:00:00+00:00"
+    assert _MODULE.signal_available_at(pd.Timestamp("2026-04-22T10:00:00Z")).isoformat() == "2026-04-22T11:00:00+00:00"
+
+
+def test_default_validation_window_ends_24h_before_run_time():
+    now = datetime(2026, 4, 25, 10, 34, 22, tzinfo=timezone.utc)
+
+    start, end = _MODULE.default_validation_window(30, now=now)
+
+    assert start.isoformat() == "2026-03-25T10:00:00+00:00"
+    assert end.isoformat() == "2026-04-24T10:00:00+00:00"
+
+
+def test_default_validation_window_rejects_invalid_days():
+    with pytest.raises(ValueError, match="window_days must be >= 1"):
+        _MODULE.default_validation_window(0, now=datetime(2026, 4, 25, tzinfo=timezone.utc))

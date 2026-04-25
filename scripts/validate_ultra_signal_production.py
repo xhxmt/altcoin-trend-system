@@ -189,6 +189,34 @@ def _parse_datetime(value: str) -> datetime:
     return _coerce_utc_datetime(parsed)
 
 
+def _coerce_utc_timestamp_value(value: datetime | pd.Timestamp) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return pd.Timestamp(value, tz="UTC")
+    return timestamp.tz_convert("UTC")
+
+
+def hour_bucket_start(value: datetime | pd.Timestamp) -> pd.Timestamp:
+    return _coerce_utc_timestamp_value(value).floor("h")
+
+
+def signal_available_at(signal_ts: datetime | pd.Timestamp) -> pd.Timestamp:
+    return hour_bucket_start(signal_ts) + pd.Timedelta(hours=1)
+
+
+def default_validation_window(
+    window_days: int,
+    *,
+    now: datetime | pd.Timestamp | None = None,
+) -> tuple[datetime, datetime]:
+    if window_days < 1:
+        raise ValueError("window_days must be >= 1")
+    current = _coerce_utc_timestamp_value(now or datetime.now(timezone.utc)).floor("h")
+    end = current - pd.Timedelta(hours=24)
+    start = end - pd.Timedelta(days=window_days)
+    return start.to_pydatetime(), end.to_pydatetime()
+
+
 def parse_signal_selector(raw: str) -> SignalSelector:
     normalized = raw.strip().lower()
     if normalized == "ultra":
@@ -501,7 +529,7 @@ def fetch_hourly_bars(engine: Engine, exchange: str, start: datetime, end: datet
             m.asset_id,
             m.exchange,
             m.symbol,
-            max(m.ts) AS ts,
+            date_trunc('hour', m.ts) AS ts,
             (array_agg(m.open ORDER BY m.ts ASC))[1] AS open,
             max(m.high) AS high,
             min(m.low) AS low,

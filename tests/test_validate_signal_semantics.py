@@ -380,6 +380,35 @@ def test_sensitivity_matrix_cell_has_denominator_and_incomplete_count():
     }
 
 
+def test_summary_and_sensitivity_matrix_default_legacy_missing_labels_to_complete():
+    row = {
+        "hit_10pct_1h": True,
+        "hit_10pct_4h": True,
+        "hit_10pct_24h": True,
+        "hit_10pct_before_drawdown_8pct": True,
+        "hit_10pct_first": True,
+        "drawdown_8pct_first": False,
+        "ambiguous_same_bar": False,
+        "mfe_24h_pct": 12.0,
+        "mae_24h_pct": -2.0,
+        "abs_mae_24h_pct": 2.0,
+        "time_to_hit_10pct_minutes": 8.0,
+        "path_results": {"target_10_dd_8": {"hit": True}},
+    }
+
+    summary = _MODULE.summarize_evaluated_signals([row])
+    matrix = _MODULE.build_sensitivity_matrix([row])
+
+    assert summary["primary_label_complete_count"] == 1
+    assert summary["incomplete_label_count"] == 0
+    assert matrix["target_10_dd_8"] == {
+        "eligible_count": 1,
+        "hit_count": 1,
+        "incomplete_count": 0,
+        "precision": 1.0,
+    }
+
+
 def test_compute_validation_path_labels_handles_empty_forward_rows():
     labels = _MODULE.compute_validation_path_labels(
         signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),

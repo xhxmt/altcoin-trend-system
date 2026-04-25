@@ -501,10 +501,14 @@ def compute_validation_path_labels(
     return labels
 
 
+def _label_complete(row: dict[str, Any], key: str) -> bool:
+    return row.get(key, True) is not False
+
+
 def build_sensitivity_matrix(evaluated: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
     matrix: dict[str, dict[str, float | int]] = {}
-    complete_rows = [row for row in evaluated if row.get("label_complete_24h")]
-    incomplete_count = sum(1 for row in evaluated if not row.get("label_complete_24h"))
+    complete_rows = [row for row in evaluated if _label_complete(row, "label_complete_24h")]
+    incomplete_count = sum(1 for row in evaluated if not _label_complete(row, "label_complete_24h"))
     for target_pct in SENSITIVITY_TARGETS:
         for drawdown_pct in SENSITIVITY_DRAWDOWNS:
             key = _path_key(target_pct, drawdown_pct)
@@ -701,9 +705,9 @@ def summarize_evaluated_signals(
     signal_family: str = "ultra_high_conviction",
 ) -> dict[str, Any]:
     signal_count = len(evaluated)
-    complete_1h = [row for row in evaluated if row.get("label_complete_1h", True)]
-    complete_4h = [row for row in evaluated if row.get("label_complete_4h", True)]
-    complete_24h = [row for row in evaluated if row.get("label_complete_24h", True)]
+    complete_1h = [row for row in evaluated if _label_complete(row, "label_complete_1h")]
+    complete_4h = [row for row in evaluated if _label_complete(row, "label_complete_4h")]
+    complete_24h = [row for row in evaluated if _label_complete(row, "label_complete_24h")]
     primary_label_complete_count = len(complete_24h)
     incomplete_label_count = signal_count - primary_label_complete_count
 

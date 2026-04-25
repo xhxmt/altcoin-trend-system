@@ -600,6 +600,52 @@ def test_check_benchmark_inputs_marks_missing_btc_or_eth():
     assert _MODULE.check_benchmark_inputs(frame, "binance") == "benchmark_missing"
 
 
+def test_resolve_validation_window_uses_explicit_from_to():
+    start, end = _MODULE.resolve_validation_window(
+        start_value="2026-03-23T00:00:00Z",
+        end_value="2026-04-22T00:00:00Z",
+        window_days=None,
+        now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert start.isoformat() == "2026-03-23T00:00:00+00:00"
+    assert end.isoformat() == "2026-04-22T00:00:00+00:00"
+
+
+def test_resolve_validation_window_uses_window_days_and_end_at():
+    start, end = _MODULE.resolve_validation_window(
+        start_value=None,
+        end_value="2026-04-24T00:00:00Z",
+        window_days=30,
+        now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert start.isoformat() == "2026-03-25T00:00:00+00:00"
+    assert end.isoformat() == "2026-04-24T00:00:00+00:00"
+
+
+def test_resolve_validation_window_defaults_to_30_days():
+    start, end = _MODULE.resolve_validation_window(
+        start_value=None,
+        end_value=None,
+        window_days=None,
+        now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert start.isoformat() == "2026-03-25T10:00:00+00:00"
+    assert end.isoformat() == "2026-04-24T10:00:00+00:00"
+
+
+def test_resolve_validation_window_rejects_inverted_range():
+    with pytest.raises(ValueError, match="start must be earlier than end"):
+        _MODULE.resolve_validation_window(
+            start_value="2026-04-24T00:00:00Z",
+            end_value="2026-04-24T00:00:00Z",
+            window_days=None,
+            now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
+        )
+
+
 def test_rule_config_hash_changes_when_rule_config_changes():
     first = _MODULE.rule_config_hash({"min_return_1h_pct": 12.0, "max_return_1h_pct": 35.0})
     second = _MODULE.rule_config_hash({"min_return_1h_pct": 13.0, "max_return_1h_pct": 35.0})

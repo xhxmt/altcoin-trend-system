@@ -608,6 +608,32 @@ def default_validation_window(
     return start.to_pydatetime(), end.to_pydatetime()
 
 
+def resolve_validation_window(
+    *,
+    start_value: str | None,
+    end_value: str | None,
+    window_days: int | None,
+    now: datetime | pd.Timestamp | None = None,
+) -> tuple[datetime, datetime]:
+    if window_days is not None and window_days < 1:
+        raise ValueError("window_days must be >= 1")
+    if start_value and end_value:
+        start = _parse_datetime(start_value)
+        end = _parse_datetime(end_value)
+    elif window_days is not None and end_value:
+        end = _parse_datetime(end_value)
+        start = (pd.Timestamp(end) - pd.Timedelta(days=window_days)).to_pydatetime()
+    elif window_days is not None:
+        start, end = default_validation_window(window_days, now=now)
+    else:
+        start, end = default_validation_window(30, now=now)
+    start = _coerce_utc_datetime(start)
+    end = _coerce_utc_datetime(end)
+    if start >= end:
+        raise ValueError("start must be earlier than end")
+    return start, end
+
+
 def parse_signal_selector(raw: str) -> SignalSelector:
     normalized = raw.strip().lower()
     if normalized == "ultra":
@@ -1492,17 +1518,28 @@ def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--from", dest="start", required=True)
-    parser.add_argument("--to", dest="end", required=True)
+    parser.add_argument("--from", dest="start")
+    parser.add_argument("--to", dest="end")
+    parser.add_argument("--window-days", type=int, default=None)
+    parser.add_argument("--end-at", dest="end_at")
     parser.add_argument("--exchange", default="binance")
     parser.add_argument("--signal-family", default="ultra_high_conviction")
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--compare-baseline-config")
+    parser.add_argument("--compare-candidate-config")
+    parser.add_argument("--compare-90d-baseline-config")
+    parser.add_argument("--compare-90d-candidate-config")
+    parser.add_argument("--change-classification", choices=("material", "non_material"), default="non_material")
+    parser.add_argument("--require-90d", action="store_true")
     args = parser.parse_args()
 
     settings = load_settings()
     engine = build_engine(settings)
-    start = _parse_datetime(args.start)
-    end = _parse_datetime(args.end)
+    start, end = resolve_validation_window(
+        start_value=args.start,
+        end_value=args.end_at or args.end,
+        window_days=args.window_days,
+    )
     signal_family = _normalize_signal_family(args.signal_family)
     summary, rows = evaluate_signal_family(engine, args.exchange, start, end, signal_family=signal_family)
     output_root = Path(args.output_root)

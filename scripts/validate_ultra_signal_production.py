@@ -20,7 +20,6 @@ from altcoin_trend.signals.trade_candidate import ULTRA_HIGH_CONVICTION_RULE
 from altcoin_trend.trade_backtest import (
     _coerce_utc_datetime,
     _prepare_feature_frame,
-    compute_forward_path_labels,
     summarize_signal_v2_groups,
 )
 
@@ -38,6 +37,13 @@ ENTRY_POLICY = "hour_close_proxy"
 FORWARD_SCAN_START_POLICY = "signal_available_at_inclusive"
 PRIMARY_LABEL = "+10_before_-8"
 PRIMARY_HORIZON_HOURS = 24
+SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
+SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
+HORIZON_TOLERANCE_MINUTES = {
+    "1h": 0,
+    "4h": 0,
+    "24h": 2,
+}
 
 
 @dataclass(frozen=True)
@@ -202,6 +208,246 @@ def hour_bucket_start(value: datetime | pd.Timestamp) -> pd.Timestamp:
 
 def signal_available_at(signal_ts: datetime | pd.Timestamp) -> pd.Timestamp:
     return hour_bucket_start(signal_ts) + pd.Timedelta(hours=1)
+
+
+def _format_pct_label(value: float) -> str:
+    return str(int(round(value * 100)))
+
+
+def _path_key(target_pct: float, drawdown_pct: float) -> str:
+    return f"target_{_format_pct_label(target_pct)}_dd_{_format_pct_label(drawdown_pct)}"
+
+
+def _empty_forward_rows() -> pd.DataFrame:
+    return pd.DataFrame(columns=["ts", "open", "high", "low"])
+
+
+def _prepare_forward_rows(future_rows: pd.DataFrame, entry_ts: pd.Timestamp, horizon_end: pd.Timestamp) -> pd.DataFrame:
+    if future_rows.empty:
+        return _empty_forward_rows()
+    frame = future_rows.copy()
+    for column in ("ts", "open", "high", "low"):
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+    for column in ("open", "high", "low"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["ts", "high", "low"])
+    frame = frame[(frame["ts"] >= entry_ts) & (frame["ts"] < horizon_end)]
+    return frame.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+
+
+def _coverage_for_horizon(rows: pd.DataFrame, entry_ts: pd.Timestamp, horizon: pd.Timedelta, tolerance: int) -> tuple[bool, int, int]:
+    expected_minutes = int(horizon.total_seconds() // 60)
+    expected = pd.date_range(start=entry_ts, periods=expected_minutes, freq="min", tz="UTC")
+    present = set(pd.to_datetime(rows["ts"], utc=True).tolist()) if not rows.empty else set()
+    missing_count = sum(1 for ts in expected if ts not in present)
+    return missing_count <= tolerance, expected_minutes, missing_count
+
+
+def _evaluate_target_drawdown_path(
+    rows: pd.DataFrame,
+    *,
+    entry_ts: pd.Timestamp,
+    entry_price: float,
+    target_pct: float,
+    drawdown_pct: float,
+) -> dict[str, Any]:
+    target_price = round(entry_price * (1.0 + target_pct), 12)
+    drawdown_price = round(entry_price * (1.0 - drawdown_pct), 12)
+    for row in rows.itertuples(index=False):
+        row_ts = _coerce_utc_timestamp_value(row.ts)
+        target_hit = float(row.high) >= target_price
+        drawdown_hit = float(row.low) <= drawdown_price
+        minutes = round((row_ts - entry_ts).total_seconds() / 60.0, 6)
+        if target_hit and drawdown_hit:
+            return {
+                "hit": False,
+                "path_order": "ambiguous_same_bar",
+                "time_to_hit_minutes": None,
+                "time_to_drawdown_minutes": minutes,
+            }
+        if drawdown_hit:
+            return {
+                "hit": False,
+                "path_order": "drawdown_first",
+                "time_to_hit_minutes": None,
+                "time_to_drawdown_minutes": minutes,
+            }
+        if target_hit:
+            return {
+                "hit": True,
+                "path_order": "target_first",
+                "time_to_hit_minutes": minutes,
+                "time_to_drawdown_minutes": None,
+            }
+    return {
+        "hit": False,
+        "path_order": "unresolved",
+        "time_to_hit_minutes": None,
+        "time_to_drawdown_minutes": None,
+    }
+
+
+def _compatibility_path_extremes(
+    rows: pd.DataFrame,
+    *,
+    entry_ts: pd.Timestamp,
+    entry_price: float,
+    primary_result: dict[str, Any],
+) -> dict[str, float | None]:
+    if rows.empty:
+        return {
+            "mfe_before_dd8_pct": 0.0,
+            "mae_before_hit_10pct": 0.0,
+            "mae_after_hit_10pct": None,
+        }
+
+    drawdown_minutes = primary_result.get("time_to_drawdown_minutes")
+    if drawdown_minutes is None:
+        rows_before_drawdown = rows
+    else:
+        drawdown_ts = entry_ts + pd.Timedelta(minutes=float(drawdown_minutes))
+        rows_before_drawdown = rows[rows["ts"] <= drawdown_ts]
+    if rows_before_drawdown.empty:
+        mfe_before_dd8 = 0.0
+    else:
+        mfe_before_dd8 = max((float(rows_before_drawdown["high"].max()) / entry_price - 1.0) * 100.0, 0.0)
+
+    hit_minutes = primary_result.get("time_to_hit_minutes")
+    if hit_minutes is None:
+        rows_before_hit = rows
+        mae_after_hit: float | None = None
+    else:
+        hit_ts = entry_ts + pd.Timedelta(minutes=float(hit_minutes))
+        rows_before_hit = rows[rows["ts"] <= hit_ts]
+        rows_after_hit = rows[rows["ts"] > hit_ts]
+        if rows_after_hit.empty:
+            mae_after_hit = 0.0
+        else:
+            mae_after_hit = max((1.0 - float(rows_after_hit["low"].min()) / entry_price) * 100.0, 0.0)
+    mae_before_hit = max((1.0 - float(rows_before_hit["low"].min()) / entry_price) * 100.0, 0.0) if not rows_before_hit.empty else 0.0
+    return {
+        "mfe_before_dd8_pct": round(mfe_before_dd8, 6),
+        "mae_before_hit_10pct": round(mae_before_hit, 6),
+        "mae_after_hit_10pct": round(mae_after_hit, 6) if mae_after_hit is not None else None,
+    }
+
+
+def compute_validation_path_labels(
+    *,
+    signal_ts: datetime | pd.Timestamp,
+    entry_price: float,
+    future_rows: pd.DataFrame,
+    horizons: Sequence[pd.Timedelta] = (pd.Timedelta(hours=1), pd.Timedelta(hours=4), pd.Timedelta(hours=24)),
+) -> dict[str, Any]:
+    close = float(entry_price)
+    signal_start = hour_bucket_start(signal_ts)
+    entry_ts = signal_available_at(signal_start)
+    horizon_end = entry_ts + max(horizons)
+    future = _prepare_forward_rows(future_rows, entry_ts, horizon_end)
+    labels: dict[str, Any] = {
+        "signal_ts": signal_start.isoformat(),
+        "signal_available_at": entry_ts.isoformat(),
+        "entry_ts": entry_ts.isoformat(),
+        "entry_price": close,
+        "entry_policy": ENTRY_POLICY,
+        "path_results": {},
+        "ambiguous_same_bar": False,
+        "path_order": "unresolved",
+        "next_minute_open_entry_price": None,
+        "next_minute_open_entry_return_delta_pct": None,
+    }
+    if not future.empty and "open" in future.columns and pd.notna(future.iloc[0].get("open")):
+        next_open = float(future.iloc[0]["open"])
+        labels["next_minute_open_entry_price"] = next_open
+        labels["next_minute_open_entry_return_delta_pct"] = round((next_open / close - 1.0) * 100.0, 6)
+
+    for horizon in horizons:
+        hours = int(horizon.total_seconds() // 3600)
+        key = f"{hours}h"
+        window_end = entry_ts + horizon
+        window_rows = future[future["ts"] < window_end].copy()
+        complete, expected_minutes, missing_count = _coverage_for_horizon(
+            window_rows,
+            entry_ts,
+            horizon,
+            HORIZON_TOLERANCE_MINUTES.get(key, 0),
+        )
+        labels[f"label_complete_{key}"] = complete
+        labels[f"expected_minutes_{key}"] = expected_minutes
+        labels[f"missing_minutes_{key}"] = missing_count
+        if window_rows.empty:
+            labels[f"mfe_{key}_pct"] = 0.0
+            labels[f"mae_{key}_pct"] = 0.0
+            labels[f"abs_mae_{key}_pct"] = 0.0
+            labels[f"hit_10pct_{key}"] = False
+            continue
+        high = max(float(window_rows["high"].max()), close)
+        low = min(float(window_rows["low"].min()), close)
+        labels[f"mfe_{key}_pct"] = round(max((high / close - 1.0) * 100.0, 0.0), 6)
+        mae = round(min((low / close - 1.0) * 100.0, 0.0), 6)
+        labels[f"mae_{key}_pct"] = mae
+        labels[f"abs_mae_{key}_pct"] = round(abs(mae), 6)
+        labels[f"hit_10pct_{key}"] = labels[f"mfe_{key}_pct"] >= 10.0
+
+    horizon_rows = future[future["ts"] < entry_ts + pd.Timedelta(hours=24)].copy()
+    primary_result: dict[str, Any] | None = None
+    for target_pct in SENSITIVITY_TARGETS:
+        for drawdown_pct in SENSITIVITY_DRAWDOWNS:
+            result = _evaluate_target_drawdown_path(
+                horizon_rows,
+                entry_ts=entry_ts,
+                entry_price=close,
+                target_pct=target_pct,
+                drawdown_pct=drawdown_pct,
+            )
+            key = _path_key(target_pct, drawdown_pct)
+            labels["path_results"][key] = result
+            if target_pct == 0.10 and drawdown_pct == 0.08:
+                primary_result = result
+                labels["hit_10pct_before_drawdown_8pct"] = bool(result["hit"])
+                labels["hit_10_before_dd8"] = bool(result["hit"])
+                labels["hit_10pct_first"] = True if result["path_order"] == "target_first" else False
+                labels["drawdown_8pct_first"] = result["path_order"] in {"drawdown_first", "ambiguous_same_bar"}
+                labels["time_to_hit_10pct_minutes"] = result["time_to_hit_minutes"]
+                labels["time_to_drawdown_8pct_minutes"] = result["time_to_drawdown_minutes"]
+                labels["path_order"] = result["path_order"]
+                labels["ambiguous_same_bar"] = result["path_order"] == "ambiguous_same_bar"
+
+    labels.setdefault("hit_10pct_before_drawdown_8pct", False)
+    labels.setdefault("hit_10_before_dd8", False)
+    labels.setdefault("hit_10pct_first", False)
+    labels.setdefault("drawdown_8pct_first", False)
+    labels.setdefault("time_to_hit_10pct_minutes", None)
+    labels.setdefault("time_to_drawdown_8pct_minutes", None)
+    labels.update(
+        _compatibility_path_extremes(
+            horizon_rows,
+            entry_ts=entry_ts,
+            entry_price=close,
+            primary_result=primary_result or {},
+        )
+    )
+    return labels
+
+
+def build_sensitivity_matrix(evaluated: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    matrix: dict[str, dict[str, float | int]] = {}
+    complete_rows = [row for row in evaluated if row.get("label_complete_24h")]
+    incomplete_count = sum(1 for row in evaluated if not row.get("label_complete_24h"))
+    for target_pct in SENSITIVITY_TARGETS:
+        for drawdown_pct in SENSITIVITY_DRAWDOWNS:
+            key = _path_key(target_pct, drawdown_pct)
+            hit_count = sum(1 for row in complete_rows if row.get("path_results", {}).get(key, {}).get("hit") is True)
+            eligible_count = len(complete_rows)
+            matrix[key] = {
+                "eligible_count": eligible_count,
+                "hit_count": hit_count,
+                "incomplete_count": incomplete_count,
+                "precision": round(hit_count / eligible_count, 6) if eligible_count else 0.0,
+            }
+    return matrix
 
 
 def default_validation_window(
@@ -555,6 +801,7 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd
         """
         SELECT
             m.ts,
+            m.open,
             m.high,
             m.low
         FROM alt_core.market_1m AS m
@@ -572,20 +819,6 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd
             {"asset_id": asset_id, "start_ts": start_ts_utc, "horizon_end": horizon_end},
         ).mappings().all()
     return pd.DataFrame(rows)
-
-
-def compute_forward_path_labels_from_availability(
-    scan_start_ts: datetime | pd.Timestamp,
-    entry_price: float,
-    future_rows: pd.DataFrame,
-) -> dict[str, Any]:
-    inclusive_start = _coerce_utc_timestamp_value(scan_start_ts)
-    # The shared legacy helper filters future rows with ts > signal_ts. For
-    # minute-open validation rows, subtracting 1ns makes the local convention
-    # [signal_available_at, signal_available_at + horizon) without changing the
-    # shared helper before the Task 3 label-engine replacement.
-    legacy_exclusive_anchor = inclusive_start - pd.Timedelta(nanoseconds=1)
-    return compute_forward_path_labels(legacy_exclusive_anchor, entry_price, future_rows)
 
 
 def evaluate_signal_family(
@@ -615,6 +848,7 @@ def evaluate_signal_family(
             "feature_rows": 0,
             "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
             "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
+            "sensitivity_matrix": build_sensitivity_matrix([]),
             **summarize_evaluated_signals([], signal_family=signal_family),
         }, []
 
@@ -628,10 +862,19 @@ def evaluate_signal_family(
         signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
         available_ts = signal_available_at(signal_ts)
         future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), available_ts, timedelta(hours=24))
-        labels = compute_forward_path_labels_from_availability(available_ts, float(row["close"]), future_1m)
+        labels = compute_validation_path_labels(
+            signal_ts=signal_ts,
+            entry_price=float(row["close"]),
+            future_rows=future_1m,
+        )
         evaluated.append(
             {
                 "ts": signal_ts.isoformat(),
+                "signal_ts": labels["signal_ts"],
+                "signal_available_at": labels["signal_available_at"],
+                "entry_ts": labels["entry_ts"],
+                "entry_price": labels["entry_price"],
+                "entry_policy": labels["entry_policy"],
                 "asset_id": int(row["asset_id"]),
                 "exchange": row["exchange"],
                 "symbol": row["symbol"],
@@ -663,17 +906,29 @@ def evaluate_signal_family(
                 "mae_1h_pct": labels["mae_1h_pct"],
                 "mae_4h_pct": labels["mae_4h_pct"],
                 "mae_24h_pct": labels["mae_24h_pct"],
+                "label_complete_1h": labels["label_complete_1h"],
+                "label_complete_4h": labels["label_complete_4h"],
+                "label_complete_24h": labels["label_complete_24h"],
+                "missing_minutes_24h": labels["missing_minutes_24h"],
+                "abs_mae_24h_pct": labels["abs_mae_24h_pct"],
                 "mfe_before_dd8_pct": labels["mfe_before_dd8_pct"],
                 "mae_before_hit_10pct": labels["mae_before_hit_10pct"],
                 "mae_after_hit_10pct": labels["mae_after_hit_10pct"],
-                "hit_10pct_1h": labels["mfe_1h_pct"] >= 10.0,
-                "hit_10pct_4h": labels["mfe_4h_pct"] >= 10.0,
-                "hit_10pct_24h": labels["mfe_24h_pct"] >= 10.0,
+                "hit_10pct_1h": labels["hit_10pct_1h"],
+                "hit_10pct_4h": labels["hit_10pct_4h"],
+                "hit_10pct_24h": labels["hit_10pct_24h"],
                 "hit_10pct_before_drawdown_8pct": bool(labels["hit_10pct_before_drawdown_8pct"]),
+                "hit_10_before_dd8": bool(labels["hit_10_before_dd8"]),
                 "hit_10pct_first": labels["hit_10pct_first"],
                 "drawdown_8pct_first": labels["drawdown_8pct_first"],
                 "time_to_hit_10pct_minutes": labels["time_to_hit_10pct_minutes"],
                 "time_to_drawdown_8pct_minutes": labels["time_to_drawdown_8pct_minutes"],
+                "path_order": labels["path_order"],
+                "ambiguous_same_bar": labels["ambiguous_same_bar"],
+                "path_results": labels["path_results"],
+                "path_results_json": json.dumps(labels["path_results"], sort_keys=True),
+                "next_minute_open_entry_price": labels["next_minute_open_entry_price"],
+                "next_minute_open_entry_return_delta_pct": labels["next_minute_open_entry_return_delta_pct"],
             }
         )
 
@@ -689,6 +944,7 @@ def evaluate_signal_family(
         "feature_rows": int(len(features)),
         "gate_flow": gate_flow,
         "group_summary": summarize_signal_v2_groups(evaluated_frame),
+        "sensitivity_matrix": build_sensitivity_matrix(evaluated),
         **summarize_evaluated_signals(evaluated, signal_family=signal_family),
     }
     return summary, evaluated

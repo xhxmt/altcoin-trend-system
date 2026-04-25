@@ -191,27 +191,46 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
         captured["fetch_horizon"] = horizon
         return pd.DataFrame([{"ts": available_ts, "high": 111.0, "low": 99.0}])
 
-    def fake_compute_forward_path_labels_from_availability(scan_start_ts, close, future_1m):
-        captured["label_scan_start_ts"] = pd.Timestamp(scan_start_ts)
+    def fake_compute_validation_path_labels(*, signal_ts, entry_price, future_rows):
+        captured["label_signal_ts"] = pd.Timestamp(signal_ts)
         return {
+            "signal_ts": signal_ts.isoformat(),
+            "signal_available_at": available_ts.isoformat(),
+            "entry_ts": available_ts.isoformat(),
+            "entry_price": entry_price,
+            "entry_policy": _MODULE.ENTRY_POLICY,
+            "label_complete_1h": False,
+            "label_complete_4h": False,
+            "label_complete_24h": False,
+            "missing_minutes_24h": 1439,
             "mfe_1h_pct": 11.0,
             "mfe_4h_pct": 11.0,
             "mfe_24h_pct": 11.0,
             "mae_1h_pct": 0.0,
             "mae_4h_pct": 0.0,
             "mae_24h_pct": 0.0,
+            "abs_mae_24h_pct": 0.0,
             "mfe_before_dd8_pct": 11.0,
             "mae_before_hit_10pct": 0.0,
             "mae_after_hit_10pct": 0.0,
+            "hit_10pct_1h": True,
+            "hit_10pct_4h": True,
+            "hit_10pct_24h": True,
             "hit_10pct_before_drawdown_8pct": True,
+            "hit_10_before_dd8": True,
             "hit_10pct_first": True,
             "drawdown_8pct_first": False,
             "time_to_hit_10pct_minutes": 0.0,
             "time_to_drawdown_8pct_minutes": None,
+            "path_order": "target_first",
+            "ambiguous_same_bar": False,
+            "path_results": {"target_10_dd_8": {"hit": True}},
+            "next_minute_open_entry_price": None,
+            "next_minute_open_entry_return_delta_pct": None,
         }
 
     monkeypatch.setattr(_MODULE, "fetch_forward_1m_rows", fake_fetch_forward_1m_rows)
-    monkeypatch.setattr(_MODULE, "compute_forward_path_labels_from_availability", fake_compute_forward_path_labels_from_availability)
+    monkeypatch.setattr(_MODULE, "compute_validation_path_labels", fake_compute_validation_path_labels)
 
     _, rows = _MODULE.evaluate_signal_family(
         object(),
@@ -223,10 +242,13 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
 
     assert rows[0]["ts"] == "2026-04-22T10:00:00+00:00"
     assert captured["fetch_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
-    assert captured["label_scan_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
+    assert captured["label_signal_ts"].isoformat() == "2026-04-22T10:00:00+00:00"
+    assert rows[0]["signal_available_at"] == "2026-04-22T11:00:00+00:00"
+    assert rows[0]["entry_ts"] == "2026-04-22T11:00:00+00:00"
+    assert rows[0]["path_results_json"] == '{"target_10_dd_8": {"hit": true}}'
 
 
-def test_forward_label_adapter_includes_first_availability_minute_and_excludes_signal_bar():
+def test_validation_path_labels_include_first_availability_minute_and_exclude_signal_bar():
     future_rows = pd.DataFrame(
         [
             {"ts": pd.Timestamp("2026-04-22T10:59:00Z"), "high": 111.0, "low": 91.0},
@@ -234,12 +256,89 @@ def test_forward_label_adapter_includes_first_availability_minute_and_excludes_s
         ]
     )
 
-    labels = _MODULE.compute_forward_path_labels_from_availability(
-        pd.Timestamp("2026-04-22T11:00:00Z"),
-        100.0,
-        future_rows,
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=100.0,
+        future_rows=future_rows,
     )
 
     assert labels["hit_10pct_before_drawdown_8pct"] is True
     assert labels["time_to_hit_10pct_minutes"] == 0.0
     assert labels["drawdown_8pct_first"] is False
+
+
+def test_forward_rows_start_at_signal_available_at_inclusive():
+    rows = pd.DataFrame(
+        [
+            {"ts": "2026-04-22T10:59:00Z", "open": 100.0, "high": 200.0, "low": 50.0},
+            {"ts": "2026-04-22T11:00:00Z", "open": 101.0, "high": 106.0, "low": 99.0},
+            {"ts": "2026-04-22T11:01:00Z", "open": 106.0, "high": 112.0, "low": 105.0},
+        ]
+    )
+
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=100.0,
+        future_rows=rows,
+        horizons=(pd.Timedelta(hours=1),),
+    )
+
+    assert labels["entry_ts"] == "2026-04-22T11:00:00+00:00"
+    assert labels["label_complete_1h"] is False
+    assert labels["mfe_1h_pct"] == 12.0
+    assert labels["mae_1h_pct"] == -1.0
+    assert labels["abs_mae_1h_pct"] == 1.0
+    assert labels["hit_10pct_1h"] is True
+    assert labels["time_to_hit_10pct_minutes"] == 1.0
+
+
+def test_same_bar_target_drawdown_is_conservative_drawdown_first():
+    rows = pd.DataFrame(
+        [
+            {"ts": "2026-04-22T11:00:00Z", "open": 100.0, "high": 111.0, "low": 91.0},
+        ]
+    )
+
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=100.0,
+        future_rows=rows,
+        horizons=(pd.Timedelta(hours=1),),
+    )
+
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["path_order"] == "ambiguous_same_bar"
+    assert labels["ambiguous_same_bar"] is True
+
+
+def test_sensitivity_matrix_cell_has_denominator_and_incomplete_count():
+    evaluated = [
+        {"label_complete_24h": True, "path_results": {"target_5_dd_5": {"hit": True}}},
+        {"label_complete_24h": True, "path_results": {"target_5_dd_5": {"hit": False}}},
+        {"label_complete_24h": False, "path_results": {"target_5_dd_5": {"hit": False}}},
+    ]
+
+    matrix = _MODULE.build_sensitivity_matrix(evaluated)
+
+    assert matrix["target_5_dd_5"] == {
+        "eligible_count": 2,
+        "hit_count": 1,
+        "incomplete_count": 1,
+        "precision": 0.5,
+    }
+
+
+def test_compute_validation_path_labels_handles_empty_forward_rows():
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=100.0,
+        future_rows=pd.DataFrame(),
+    )
+
+    assert labels["label_complete_24h"] is False
+    assert labels["missing_minutes_24h"] == 1440
+    assert labels["mfe_24h_pct"] == 0.0
+    assert labels["mae_24h_pct"] == 0.0
+    assert labels["abs_mae_24h_pct"] == 0.0
+    assert labels["path_order"] == "unresolved"
+    assert labels["hit_10_before_dd8"] is False

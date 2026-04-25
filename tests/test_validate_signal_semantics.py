@@ -432,6 +432,9 @@ def test_summarize_evaluated_signals_counts_v11_unresolved_path_order():
     summary = _MODULE.summarize_evaluated_signals(
         [
             {
+                "label_complete_1h": True,
+                "label_complete_4h": True,
+                "label_complete_24h": True,
                 "hit_10pct_1h": False,
                 "hit_10pct_4h": False,
                 "hit_10pct_24h": False,
@@ -442,13 +445,65 @@ def test_summarize_evaluated_signals_counts_v11_unresolved_path_order():
                 "mfe_1h_pct": 0.0,
                 "mfe_24h_pct": 0.0,
                 "mae_24h_pct": 0.0,
+                "abs_mae_24h_pct": 0.0,
                 "mfe_before_dd8_pct": 0.0,
                 "mae_before_hit_10pct": 0.0,
                 "mae_after_hit_10pct": None,
                 "time_to_hit_10pct_minutes": None,
                 "time_to_drawdown_8pct_minutes": None,
+                "path_results": {"target_10_dd_8": {"hit": False}},
             }
         ]
     )
 
     assert summary["unresolved_24h_count"] == 1
+
+
+def test_summarize_evaluated_signals_excludes_incomplete_labels_from_denominator():
+    rows = [
+        {
+            "label_complete_1h": True,
+            "label_complete_4h": True,
+            "label_complete_24h": True,
+            "hit_10pct_1h": True,
+            "hit_10pct_4h": True,
+            "hit_10pct_24h": True,
+            "hit_10pct_before_drawdown_8pct": True,
+            "hit_10pct_first": True,
+            "drawdown_8pct_first": False,
+            "ambiguous_same_bar": False,
+            "mfe_24h_pct": 20.0,
+            "mae_24h_pct": -3.0,
+            "abs_mae_24h_pct": 3.0,
+            "time_to_hit_10pct_minutes": 5.0,
+            "path_results": {"target_10_dd_8": {"hit": True}},
+        },
+        {
+            "label_complete_1h": True,
+            "label_complete_4h": True,
+            "label_complete_24h": False,
+            "hit_10pct_1h": False,
+            "hit_10pct_4h": False,
+            "hit_10pct_24h": False,
+            "hit_10pct_before_drawdown_8pct": False,
+            "hit_10pct_first": False,
+            "drawdown_8pct_first": False,
+            "ambiguous_same_bar": False,
+            "mfe_24h_pct": 0.0,
+            "mae_24h_pct": 0.0,
+            "abs_mae_24h_pct": 0.0,
+            "time_to_hit_10pct_minutes": None,
+            "path_results": {"target_10_dd_8": {"hit": False}},
+        },
+    ]
+
+    summary = _MODULE.summarize_evaluated_signals(rows, signal_family="ignition")
+
+    assert summary["signal_count"] == 2
+    assert summary["primary_label_complete_count"] == 1
+    assert summary["incomplete_label_count"] == 1
+    assert summary["hit10_24h_rate"] == 1.0
+    assert summary["precision_before_dd8"] == 1.0
+    assert summary["avg_mae_24h_pct"] == -3.0
+    assert summary["avg_abs_mae_24h_pct"] == 3.0
+    assert summary["ambiguous_same_bar_count"] == 0

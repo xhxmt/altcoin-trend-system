@@ -614,6 +614,10 @@ def _mean_numeric(values: list[Any]) -> float:
     return round(float(series.mean()), 6)
 
 
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 6) if denominator else 0.0
+
+
 def _median_numeric(values: list[Any]) -> float:
     series = pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").dropna()
     if series.empty:
@@ -697,18 +701,25 @@ def summarize_evaluated_signals(
     signal_family: str = "ultra_high_conviction",
 ) -> dict[str, Any]:
     signal_count = len(evaluated)
-    hit_1h_count = sum(1 for row in evaluated if row.get("hit_10pct_1h"))
-    hit_4h_count = sum(1 for row in evaluated if row.get("hit_10pct_4h"))
-    hit_24h_count = sum(1 for row in evaluated if row.get("hit_10pct_24h"))
-    strict_hit_count = sum(1 for row in evaluated if row.get("hit_10pct_before_drawdown_8pct"))
-    hit_10pct_first_count = sum(1 for row in evaluated if row.get("hit_10pct_first") is True)
-    drawdown_8pct_first_count = sum(1 for row in evaluated if row.get("drawdown_8pct_first") is True)
+    complete_1h = [row for row in evaluated if row.get("label_complete_1h", True)]
+    complete_4h = [row for row in evaluated if row.get("label_complete_4h", True)]
+    complete_24h = [row for row in evaluated if row.get("label_complete_24h", True)]
+    primary_label_complete_count = len(complete_24h)
+    incomplete_label_count = signal_count - primary_label_complete_count
+
+    hit_1h_count = sum(1 for row in complete_1h if row.get("hit_10pct_1h"))
+    hit_4h_count = sum(1 for row in complete_4h if row.get("hit_10pct_4h"))
+    hit_24h_count = sum(1 for row in complete_24h if row.get("hit_10pct_24h"))
+    strict_hit_count = sum(1 for row in complete_24h if row.get("hit_10pct_before_drawdown_8pct"))
+    hit_10pct_first_count = sum(1 for row in complete_24h if row.get("hit_10pct_first") is True)
+    drawdown_8pct_first_count = sum(1 for row in complete_24h if row.get("drawdown_8pct_first") is True)
     unresolved_24h_count = sum(
         1
-        for row in evaluated
+        for row in complete_24h
         if row.get("path_order") == "unresolved"
         or (row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None)
     )
+    ambiguous_same_bar_count = sum(1 for row in complete_24h if row.get("ambiguous_same_bar") is True)
 
     selector = _coerce_signal_selector(signal_family)
     count_key = _signal_count_key(selector)
@@ -720,6 +731,8 @@ def summarize_evaluated_signals(
         "signal_family": selector.label,
         "signal_count": signal_count,
         **count_values,
+        "primary_label_complete_count": primary_label_complete_count,
+        "incomplete_label_count": incomplete_label_count,
         "hit_10_1h_count": hit_1h_count,
         "hit_10_4h_count": hit_4h_count,
         "hit_10_24h_count": hit_24h_count,
@@ -727,20 +740,28 @@ def summarize_evaluated_signals(
         "hit_10pct_first_count": hit_10pct_first_count,
         "drawdown_8pct_first_count": drawdown_8pct_first_count,
         "unresolved_24h_count": unresolved_24h_count,
-        "precision_1h": round(hit_1h_count / signal_count, 6) if signal_count else 0.0,
-        "precision_4h": round(hit_4h_count / signal_count, 6) if signal_count else 0.0,
-        "precision_24h": round(hit_24h_count / signal_count, 6) if signal_count else 0.0,
-        "precision_before_dd8": round(strict_hit_count / signal_count, 6) if signal_count else 0.0,
-        "hit_10pct_first_rate": round(hit_10pct_first_count / signal_count, 6) if signal_count else 0.0,
-        "drawdown_8pct_first_rate": round(drawdown_8pct_first_count / signal_count, 6) if signal_count else 0.0,
-        "avg_mfe_1h_pct": _mean_numeric([row.get("mfe_1h_pct") for row in evaluated]),
-        "avg_mfe_24h_pct": _mean_numeric([row.get("mfe_24h_pct") for row in evaluated]),
-        "avg_mae_24h_pct": _mean_numeric([row.get("mae_24h_pct") for row in evaluated]),
-        "avg_mfe_before_dd8_pct": _mean_numeric([row.get("mfe_before_dd8_pct") for row in evaluated]),
-        "avg_mae_before_hit_10pct": _mean_numeric([row.get("mae_before_hit_10pct") for row in evaluated]),
-        "avg_mae_after_hit_10pct": _mean_numeric([row.get("mae_after_hit_10pct") for row in evaluated]),
-        "median_time_to_hit_10pct_minutes": _median_numeric([row.get("time_to_hit_10pct_minutes") for row in evaluated]),
-        "median_time_to_drawdown_8pct_minutes": _median_numeric([row.get("time_to_drawdown_8pct_minutes") for row in evaluated]),
+        "ambiguous_same_bar_count": ambiguous_same_bar_count,
+        "hit10_1h_rate": _rate(hit_1h_count, len(complete_1h)),
+        "hit10_4h_rate": _rate(hit_4h_count, len(complete_4h)),
+        "hit10_24h_rate": _rate(hit_24h_count, primary_label_complete_count),
+        "precision_1h": _rate(hit_1h_count, len(complete_1h)),
+        "precision_4h": _rate(hit_4h_count, len(complete_4h)),
+        "precision_24h": _rate(hit_24h_count, primary_label_complete_count),
+        "precision_before_dd8": _rate(strict_hit_count, primary_label_complete_count),
+        "hit_10pct_first_rate": _rate(hit_10pct_first_count, primary_label_complete_count),
+        "drawdown_8pct_first_rate": _rate(drawdown_8pct_first_count, primary_label_complete_count),
+        "avg_mfe_1h_pct": _mean_numeric([row.get("mfe_1h_pct") for row in complete_1h]),
+        "avg_mfe_24h_pct": _mean_numeric([row.get("mfe_24h_pct") for row in complete_24h]),
+        "avg_mae_24h_pct": _mean_numeric([row.get("mae_24h_pct") for row in complete_24h]),
+        "avg_abs_mae_24h_pct": _mean_numeric([row.get("abs_mae_24h_pct") for row in complete_24h]),
+        "avg_mfe_before_dd8_pct": _mean_numeric([row.get("mfe_before_dd8_pct") for row in complete_24h]),
+        "avg_mae_before_hit_10pct": _mean_numeric([row.get("mae_before_hit_10pct") for row in complete_24h]),
+        "avg_mae_after_hit_10pct": _mean_numeric([row.get("mae_after_hit_10pct") for row in complete_24h]),
+        "median_time_to_hit_10pct_minutes": _median_numeric([row.get("time_to_hit_10pct_minutes") for row in complete_24h]),
+        "median_time_to_drawdown_8pct_minutes": _median_numeric(
+            [row.get("time_to_drawdown_8pct_minutes") for row in complete_24h]
+        ),
+        "sensitivity_matrix": build_sensitivity_matrix(evaluated),
     }
 
 

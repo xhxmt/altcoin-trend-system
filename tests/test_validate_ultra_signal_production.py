@@ -268,6 +268,9 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
     summary = summarize_evaluated_signals(
         [
             {
+                "label_complete_1h": True,
+                "label_complete_4h": True,
+                "label_complete_24h": True,
                 "hit_10pct_1h": True,
                 "hit_10pct_4h": True,
                 "hit_10pct_24h": True,
@@ -276,7 +279,8 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
                 "drawdown_8pct_first": False,
                 "mfe_1h_pct": 12.0,
                 "mfe_24h_pct": 30.0,
-                "mae_24h_pct": 5.0,
+                "mae_24h_pct": -5.0,
+                "abs_mae_24h_pct": 5.0,
                 "mfe_before_dd8_pct": 15.0,
                 "mae_before_hit_10pct": 2.0,
                 "mae_after_hit_10pct": 4.0,
@@ -284,6 +288,9 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
                 "time_to_drawdown_8pct_minutes": 60.0,
             },
             {
+                "label_complete_1h": True,
+                "label_complete_4h": True,
+                "label_complete_24h": True,
                 "hit_10pct_1h": False,
                 "hit_10pct_4h": True,
                 "hit_10pct_24h": True,
@@ -292,7 +299,8 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
                 "drawdown_8pct_first": True,
                 "mfe_1h_pct": 8.0,
                 "mfe_24h_pct": 40.0,
-                "mae_24h_pct": 12.0,
+                "mae_24h_pct": -12.0,
+                "abs_mae_24h_pct": 12.0,
                 "mfe_before_dd8_pct": 10.0,
                 "mae_before_hit_10pct": 9.0,
                 "mae_after_hit_10pct": 1.0,
@@ -300,6 +308,9 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
                 "time_to_drawdown_8pct_minutes": 10.0,
             },
             {
+                "label_complete_1h": True,
+                "label_complete_4h": True,
+                "label_complete_24h": True,
                 "hit_10pct_1h": False,
                 "hit_10pct_4h": False,
                 "hit_10pct_24h": False,
@@ -308,7 +319,8 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
                 "drawdown_8pct_first": None,
                 "mfe_1h_pct": 1.0,
                 "mfe_24h_pct": 6.0,
-                "mae_24h_pct": 3.0,
+                "mae_24h_pct": -4.0,
+                "abs_mae_24h_pct": 4.0,
                 "mfe_before_dd8_pct": 6.0,
                 "mae_before_hit_10pct": 3.0,
                 "mae_after_hit_10pct": None,
@@ -326,6 +338,9 @@ def test_summarize_evaluated_signals_reports_path_risk_metrics():
     assert summary["unresolved_24h_count"] == 1
     assert summary["hit_10pct_first_rate"] == 0.333333
     assert summary["drawdown_8pct_first_rate"] == 0.333333
+    assert summary["hit10_24h_rate"] == 0.666667
+    assert summary["avg_mae_24h_pct"] == -7.0
+    assert summary["avg_abs_mae_24h_pct"] == 7.0
     assert summary["avg_mfe_before_dd8_pct"] == 10.333333
     assert summary["avg_mae_before_hit_10pct"] == 4.666667
     assert summary["avg_mae_after_hit_10pct"] == 2.5

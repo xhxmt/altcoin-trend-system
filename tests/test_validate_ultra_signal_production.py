@@ -31,12 +31,30 @@ def test_build_run_metadata_captures_validation_contract(tmp_path):
         output_dir=output_dir,
         output_root=tmp_path,
         generated_at=datetime(2026, 4, 23, 12, 6, 3, tzinfo=timezone.utc),
+        coverage_status="trusted",
+        primary_label_complete_count=4,
+        incomplete_label_count=0,
     )
 
+    assert metadata["validator_version"] == "v1.1"
+    assert metadata["entry_policy"] == "hour_close_proxy"
+    assert metadata["market_1m_timestamp_semantics"] == "minute_open_utc"
+    assert metadata["timestamp_semantics"] == "hour_bucket_start_utc"
+    assert metadata["forward_scan_start_policy"] == "signal_available_at_inclusive"
+    assert metadata["primary_label"] == "+10_before_-8"
+    assert metadata["horizon_hours"] == 24
+    assert metadata["coverage_status"] == "trusted"
+    assert metadata["feature_preparation_version"] == "feature_v2"
+    assert metadata["rule_version"].startswith("ultra_high_conviction:sha256:")
+    assert metadata["rule_config_hash"].startswith("sha256:")
+    assert isinstance(metadata["rule_config"], dict)
     assert metadata["validation_window"] == {
         "from": "2026-01-22T10:00:00+00:00",
         "to": "2026-04-22T10:00:00+00:00",
     }
+    assert metadata["symbol_allowlist"] == []
+    assert metadata["symbol_blocklist"] == []
+    assert metadata["missing_optional_columns"] == []
     assert metadata["signal_family"] == "ultra_high_conviction"
     assert metadata["warmup_window"]["from"] == "2025-12-22T10:00:00+00:00"
     assert metadata["forward_window"]["to"] == "2026-04-23T11:00:00+00:00"
@@ -76,7 +94,26 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
         "median_time_to_hit_10pct_minutes": 30.0,
         "median_time_to_drawdown_8pct_minutes": 45.0,
     }
-    rows = [{"symbol": "HIGHUSDT", "mfe_1h_pct": 12.0, "mae_before_hit_10pct": 4.0}]
+    rows = [
+        {
+            "exchange": "binance",
+            "symbol": "HIGHUSDT",
+            "signal_family": "ultra_high_conviction",
+            "signal_grade": "",
+            "signal_ts": "2026-04-22T10:00:00+00:00",
+            "signal_available_at": "2026-04-22T11:00:00+00:00",
+            "entry_ts": "2026-04-22T11:00:00+00:00",
+            "entry_price": 100.0,
+            "entry_policy": "hour_close_proxy",
+            "label_complete_24h": True,
+            "hit_10_before_dd8": True,
+            "mfe_24h_pct": 12.0,
+            "mae_24h_pct": -4.0,
+            "abs_mae_24h_pct": 4.0,
+            "time_to_hit_10pct_minutes": 12.0,
+            "path_order": "target_first",
+        }
+    ]
     metadata = build_run_metadata(
         exchange="binance",
         start=datetime(2026, 1, 22, 10, 0, tzinfo=timezone.utc),
@@ -86,6 +123,9 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
         output_dir=output_dir,
         output_root=tmp_path,
         generated_at=datetime(2026, 4, 23, 12, 6, 3, tzinfo=timezone.utc),
+        coverage_status="trusted",
+        primary_label_complete_count=4,
+        incomplete_label_count=0,
     )
 
     write_artifacts(output_dir, summary, rows, metadata)
@@ -103,6 +143,11 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
     assert "pass_rank_24h: 0" in readme
     assert "pass_quality_gate: 4" in readme
     assert "signal_family: ultra_high_conviction" in readme
+    assert "validator_version: v1.1" in readme
+    assert "entry_policy: hour_close_proxy" in readme
+    assert "forward_scan_start_policy: signal_available_at_inclusive" in readme
+    assert "hit10_24h_rate" in readme
+    assert "avg_abs_mae_24h_pct" in readme
 
 
 def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
@@ -138,6 +183,9 @@ def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
         output_dir=output_dir,
         output_root=tmp_path,
         generated_at=datetime(2026, 4, 23, 12, 6, 3, tzinfo=timezone.utc),
+        coverage_status="trusted",
+        primary_label_complete_count=4,
+        incomplete_label_count=0,
     )
 
     write_artifacts(output_dir, summary, [], metadata)
@@ -360,6 +408,9 @@ def test_build_run_metadata_supports_ignition_family(tmp_path):
         output_root=tmp_path,
         signal_family="ignition",
         generated_at=datetime(2026, 4, 24, 7, 0, 0, tzinfo=timezone.utc),
+        coverage_status="trusted",
+        primary_label_complete_count=4,
+        incomplete_label_count=0,
     )
 
     assert metadata["signal_family"] == "ignition"
@@ -406,6 +457,9 @@ def test_build_run_readme_includes_ignition_group_snapshot(tmp_path):
         output_root=tmp_path,
         signal_family="ignition",
         generated_at=datetime(2026, 4, 24, 7, 0, 0, tzinfo=timezone.utc),
+        coverage_status="trusted",
+        primary_label_complete_count=4,
+        incomplete_label_count=0,
     )
 
     write_artifacts(output_dir, summary, [], metadata)

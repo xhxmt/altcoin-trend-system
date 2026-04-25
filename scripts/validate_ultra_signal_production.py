@@ -33,6 +33,7 @@ SIGNALS_FILENAME = "signals.csv"
 METADATA_FILENAME = "metadata.json"
 README_FILENAME = "README.md"
 VALIDATOR_VERSION = "signal_validation_trust_v1.1"
+METADATA_VALIDATOR_VERSION = "v1.1"
 FEATURE_PREPARATION_VERSION = "feature_v2"
 MARKET_1M_TIMESTAMP_SEMANTICS = "minute_open_utc"
 TIMESTAMP_SEMANTICS = "hour_bucket_start_utc"
@@ -45,6 +46,34 @@ MINIMUM_CANDIDATE_COMPLETE_COUNT = 10
 COVERAGE_TRUST_THRESHOLD = 0.95
 SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
 SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
+OPTIONAL_REPORTING_COLUMNS = [
+    "return_1h_pct",
+    "return_4h_pct",
+    "return_24h_pct",
+    "return_7d_pct",
+    "return_30d_pct",
+    "quality_score",
+    "chase_risk_score",
+    "risk_flags",
+]
+SIGNALS_MINIMUM_COLUMNS = [
+    "exchange",
+    "symbol",
+    "signal_family",
+    "signal_grade",
+    "signal_ts",
+    "signal_available_at",
+    "entry_ts",
+    "entry_price",
+    "entry_policy",
+    "label_complete_24h",
+    "hit_10_before_dd8",
+    "mfe_24h_pct",
+    "mae_24h_pct",
+    "abs_mae_24h_pct",
+    "time_to_hit_10pct_minutes",
+    "path_order",
+]
 HORIZON_TOLERANCE_MINUTES = {
     "1h": 0,
     "4h": 0,
@@ -626,6 +655,10 @@ def current_rule_version(signal_family: str | SignalSelector) -> tuple[str, str,
     return f"{selector.label}:{config_hash}", config_hash, config
 
 
+def detect_missing_optional_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in OPTIONAL_REPORTING_COLUMNS if column not in frame.columns]
+
+
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(float("nan"), index=frame.index, dtype="float64")
@@ -1007,6 +1040,7 @@ def evaluate_signal_family(
             "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
             "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
             "sensitivity_matrix": build_sensitivity_matrix([]),
+            "missing_optional_columns": detect_missing_optional_columns(pd.DataFrame()),
             **summarize_evaluated_signals([], signal_family=signal_family),
         }
         summary["benchmark_status"] = "benchmark_missing"
@@ -1019,6 +1053,7 @@ def evaluate_signal_family(
         return summary, []
 
     features = _prepare_feature_frame(hourly)
+    missing_optional_columns = detect_missing_optional_columns(features)
     window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
     gate_flow = summarize_ultra_gate_flow(window) if signal_family == "ultra_high_conviction" else {}
     signals = _select_signal_rows(window, signal_family)
@@ -1119,6 +1154,7 @@ def evaluate_signal_family(
         "gate_flow": gate_flow,
         "group_summary": summarize_signal_v2_groups(evaluated_frame),
         "sensitivity_matrix": build_sensitivity_matrix(evaluated),
+        "missing_optional_columns": missing_optional_columns,
         **summarize_evaluated_signals(evaluated, signal_family=signal_family),
     }
     benchmark_status = check_benchmark_inputs(features, exchange)
@@ -1158,27 +1194,66 @@ def build_run_metadata(
     output_root: Path,
     signal_family: str = "ultra_high_conviction",
     generated_at: datetime | None = None,
+    git_sha: str = "unknown",
+    symbol_allowlist: list[str] | None = None,
+    symbol_blocklist: list[str] | None = None,
+    coverage_status: str = "insufficient_forward_coverage",
+    primary_label_complete_count: int = 0,
+    incomplete_label_count: int = 0,
+    missing_optional_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     signal_family = _normalize_signal_family(signal_family)
+    selector = _coerce_signal_selector(signal_family)
     generated = _coerce_utc_datetime(generated_at or datetime.now(timezone.utc))
+    start_utc = _coerce_utc_datetime(start)
+    end_utc = _coerce_utc_datetime(end)
+    market_start_utc = _coerce_utc_datetime(market_start)
+    market_end_utc = _coerce_utc_datetime(market_end)
+    allowlist = list(symbol_allowlist or [])
+    blocklist = list(symbol_blocklist or [])
+    rule_version, config_hash, rule_config = current_rule_version(signal_family)
     return {
         "script": "scripts/validate_ultra_signal_production.py",
         "generated_at": generated.isoformat(),
+        "validator_version": METADATA_VALIDATOR_VERSION,
+        "git_sha": git_sha,
+        "run_started_at": generated.isoformat(),
+        "window_start": start_utc.isoformat(),
+        "window_end": end_utc.isoformat(),
+        "exchange_universe": [exchange],
+        "symbol_allowlist": allowlist,
+        "symbol_blocklist": blocklist,
+        "family": selector.family.name,
+        "selector": selector.label,
+        "rule_version": rule_version,
+        "rule_config_hash": config_hash,
+        "rule_config": rule_config,
+        "feature_preparation_version": FEATURE_PREPARATION_VERSION,
+        "entry_policy": ENTRY_POLICY,
+        "market_1m_timestamp_semantics": MARKET_1M_TIMESTAMP_SEMANTICS,
+        "timestamp_semantics": TIMESTAMP_SEMANTICS,
+        "forward_scan_start_policy": FORWARD_SCAN_START_POLICY,
+        "primary_label": PRIMARY_LABEL,
+        "horizon_hours": PRIMARY_HORIZON_HOURS,
+        "primary_label_complete_count": primary_label_complete_count,
+        "incomplete_label_count": incomplete_label_count,
+        "coverage_status": coverage_status,
+        "missing_optional_columns": list(missing_optional_columns or []),
         "signal_family": signal_family,
         "signal_family_slug": _signal_family_slug(signal_family),
         "signal_family_title": _signal_family_title(signal_family),
         "exchange": exchange,
         "validation_window": {
-            "from": start.isoformat(),
-            "to": end.isoformat(),
+            "from": start_utc.isoformat(),
+            "to": end_utc.isoformat(),
         },
         "warmup_window": {
-            "from": market_start.isoformat(),
-            "to": start.isoformat(),
+            "from": market_start_utc.isoformat(),
+            "to": start_utc.isoformat(),
         },
         "forward_window": {
-            "from": end.isoformat(),
-            "to": market_end.isoformat(),
+            "from": end_utc.isoformat(),
+            "to": market_end_utc.isoformat(),
             "horizon": "24h",
         },
         "expected_inputs": {
@@ -1259,6 +1334,11 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
         f"# {_signal_family_title(signal_family)} Production Validation",
         "",
         f"- generated_at: {metadata['generated_at']}",
+        f"- validator_version: {metadata.get('validator_version', METADATA_VALIDATOR_VERSION)}",
+        f"- entry_policy: {metadata.get('entry_policy', ENTRY_POLICY)}",
+        f"- timestamp_semantics: {metadata.get('timestamp_semantics', TIMESTAMP_SEMANTICS)}",
+        f"- forward_scan_start_policy: {metadata.get('forward_scan_start_policy', FORWARD_SCAN_START_POLICY)}",
+        f"- coverage_status: {metadata.get('coverage_status', 'trusted')}",
         f"- signal_family: {signal_family}",
         f"- exchange: {metadata['exchange']}",
         f"- validation_window: {window['from']} -> {window['to']}",
@@ -1289,11 +1369,17 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
             f"- precision_1h: {summary['precision_1h']}",
             f"- precision_4h: {summary['precision_4h']}",
             f"- precision_24h: {summary['precision_24h']}",
+            f"- hit10_1h_rate: {summary.get('hit10_1h_rate', summary.get('precision_1h', 0.0))}",
+            f"- hit10_4h_rate: {summary.get('hit10_4h_rate', summary.get('precision_4h', 0.0))}",
+            f"- hit10_24h_rate: {summary.get('hit10_24h_rate', summary.get('precision_24h', 0.0))}",
             f"- precision_before_dd8: {summary['precision_before_dd8']}",
             f"- hit_10pct_first_rate: {summary['hit_10pct_first_rate']}",
             f"- drawdown_8pct_first_rate: {summary['drawdown_8pct_first_rate']}",
             f"- avg_mfe_24h_pct: {summary['avg_mfe_24h_pct']}",
             f"- avg_mae_24h_pct: {summary['avg_mae_24h_pct']}",
+            f"- avg_abs_mae_24h_pct: {summary.get('avg_abs_mae_24h_pct', 0.0)}",
+            f"- ambiguous_same_bar_count: {summary.get('ambiguous_same_bar_count', 0)}",
+            f"- incomplete_label_count: {summary.get('incomplete_label_count', 0)}",
             f"- avg_mfe_before_dd8_pct: {summary['avg_mfe_before_dd8_pct']}",
             f"- avg_mae_before_hit_10pct: {summary['avg_mae_before_hit_10pct']}",
             f"- avg_mae_after_hit_10pct: {summary['avg_mae_after_hit_10pct']}",
@@ -1337,10 +1423,21 @@ def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[s
     if not rows:
         (output_dir / SIGNALS_FILENAME).write_text("", encoding="utf-8")
         return
+    csv_rows = []
+    for row in rows:
+        csv_row = dict(row)
+        if "path_results" in csv_row:
+            csv_row.pop("path_results")
+        if "path_results_json" not in csv_row and "path_results" in row:
+            csv_row["path_results_json"] = json.dumps(row["path_results"], sort_keys=True)
+        for column in SIGNALS_MINIMUM_COLUMNS:
+            csv_row.setdefault(column, None)
+        csv_rows.append(csv_row)
+    extra_columns = sorted({key for row in csv_rows for key in row.keys()} - set(SIGNALS_MINIMUM_COLUMNS))
     with (output_dir / SIGNALS_FILENAME).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=SIGNALS_MINIMUM_COLUMNS + extra_columns)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(csv_rows)
 
 
 def main() -> int:
@@ -1371,6 +1468,10 @@ def main() -> int:
         output_dir=output_dir,
         output_root=output_root,
         signal_family=signal_family,
+        coverage_status=str(summary.get("coverage_status", "insufficient_forward_coverage")),
+        primary_label_complete_count=int(summary.get("primary_label_complete_count", 0)),
+        incomplete_label_count=int(summary.get("incomplete_label_count", 0)),
+        missing_optional_columns=list(summary.get("missing_optional_columns") or []),
     )
     write_artifacts(output_dir, summary, rows, metadata)
     print(f"output_dir={output_dir}")

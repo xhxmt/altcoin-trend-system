@@ -574,6 +574,20 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd
     return pd.DataFrame(rows)
 
 
+def compute_forward_path_labels_from_availability(
+    scan_start_ts: datetime | pd.Timestamp,
+    entry_price: float,
+    future_rows: pd.DataFrame,
+) -> dict[str, Any]:
+    inclusive_start = _coerce_utc_timestamp_value(scan_start_ts)
+    # The shared legacy helper filters future rows with ts > signal_ts. For
+    # minute-open validation rows, subtracting 1ns makes the local convention
+    # [signal_available_at, signal_available_at + horizon) without changing the
+    # shared helper before the Task 3 label-engine replacement.
+    legacy_exclusive_anchor = inclusive_start - pd.Timedelta(nanoseconds=1)
+    return compute_forward_path_labels(legacy_exclusive_anchor, entry_price, future_rows)
+
+
 def evaluate_signal_family(
     engine: Engine,
     exchange: str,
@@ -614,7 +628,7 @@ def evaluate_signal_family(
         signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
         available_ts = signal_available_at(signal_ts)
         future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), available_ts, timedelta(hours=24))
-        labels = compute_forward_path_labels(available_ts, float(row["close"]), future_1m)
+        labels = compute_forward_path_labels_from_availability(available_ts, float(row["close"]), future_1m)
         evaluated.append(
             {
                 "ts": signal_ts.isoformat(),

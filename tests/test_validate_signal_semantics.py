@@ -191,7 +191,7 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
         captured["fetch_horizon"] = horizon
         return pd.DataFrame([{"ts": available_ts, "high": 111.0, "low": 99.0}])
 
-    def fake_compute_forward_path_labels(scan_start_ts, close, future_1m):
+    def fake_compute_forward_path_labels_from_availability(scan_start_ts, close, future_1m):
         captured["label_scan_start_ts"] = pd.Timestamp(scan_start_ts)
         return {
             "mfe_1h_pct": 11.0,
@@ -211,7 +211,7 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
         }
 
     monkeypatch.setattr(_MODULE, "fetch_forward_1m_rows", fake_fetch_forward_1m_rows)
-    monkeypatch.setattr(_MODULE, "compute_forward_path_labels", fake_compute_forward_path_labels)
+    monkeypatch.setattr(_MODULE, "compute_forward_path_labels_from_availability", fake_compute_forward_path_labels_from_availability)
 
     _, rows = _MODULE.evaluate_signal_family(
         object(),
@@ -224,3 +224,22 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
     assert rows[0]["ts"] == "2026-04-22T10:00:00+00:00"
     assert captured["fetch_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
     assert captured["label_scan_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
+
+
+def test_forward_label_adapter_includes_first_availability_minute_and_excludes_signal_bar():
+    future_rows = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-04-22T10:59:00Z"), "high": 111.0, "low": 91.0},
+            {"ts": pd.Timestamp("2026-04-22T11:00:00Z"), "high": 111.0, "low": 100.0},
+        ]
+    )
+
+    labels = _MODULE.compute_forward_path_labels_from_availability(
+        pd.Timestamp("2026-04-22T11:00:00Z"),
+        100.0,
+        future_rows,
+    )
+
+    assert labels["hit_10pct_before_drawdown_8pct"] is True
+    assert labels["time_to_hit_10pct_minutes"] == 0.0
+    assert labels["drawdown_8pct_first"] is False

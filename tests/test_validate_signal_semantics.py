@@ -886,7 +886,7 @@ def test_compare_validation_runs_uses_signed_mae_fallback_when_abs_mae_unavailab
     assert result["path_risk_pass"] is True
 
 
-def test_compare_validation_runs_accepts_signed_mae_improvement_when_abs_mae_worsens():
+def test_compare_validation_runs_rejects_inconsistent_signed_mae_with_abs_mae():
     baseline = {
         "metadata": _comparison_metadata(),
         "summary": _comparison_summary(
@@ -900,7 +900,7 @@ def test_compare_validation_runs_accepts_signed_mae_improvement_when_abs_mae_wor
         "summary": _comparison_summary(
             precision_before_dd8=0.6,
             avg_abs_mae_24h_pct=7.0,
-            avg_mae_24h_pct=-4.0,
+            avg_mae_24h_pct=-7.0,
         ),
     }
 
@@ -911,16 +911,165 @@ def test_compare_validation_runs_accepts_signed_mae_improvement_when_abs_mae_wor
         change_classification="non_material",
     )
 
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_avg_mae_24h_pct"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("baseline_precision_before_dd8", 1.1),
+        ("baseline_precision_before_dd8", -0.1),
+        ("candidate_precision_before_dd8", 1.1),
+        ("candidate_precision_before_dd8", -0.1),
+    ],
+)
+def test_compare_validation_runs_rejects_out_of_range_precision(field, value):
+    baseline_summary = _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0)
+    candidate_summary = _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0)
+    if field.startswith("baseline"):
+        baseline_summary["precision_before_dd8"] = value
+    else:
+        candidate_summary["precision_before_dd8"] = value
+
+    result = _MODULE.compare_validation_runs(
+        {"metadata": _comparison_metadata(), "summary": baseline_summary},
+        {"metadata": _comparison_metadata(), "summary": candidate_summary},
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == field
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("baseline_avg_abs_mae_24h_pct", -1.0),
+        ("candidate_avg_abs_mae_24h_pct", -2.0),
+    ],
+)
+def test_compare_validation_runs_rejects_negative_avg_abs_mae(field, value):
+    baseline_summary = _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0)
+    candidate_summary = _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=7.0)
+    if field.startswith("baseline"):
+        baseline_summary["avg_abs_mae_24h_pct"] = value
+    else:
+        candidate_summary["avg_abs_mae_24h_pct"] = value
+
+    result = _MODULE.compare_validation_runs(
+        {"metadata": _comparison_metadata(), "summary": baseline_summary},
+        {"metadata": _comparison_metadata(), "summary": candidate_summary},
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == field
+
+
+def test_compare_validation_runs_rejects_positive_signed_mae():
+    baseline_summary = _comparison_summary(precision_before_dd8=0.6, avg_mae_24h_pct=5.0)
+    baseline_summary.pop("avg_abs_mae_24h_pct")
+    candidate_summary = _comparison_summary(precision_before_dd8=0.6, avg_mae_24h_pct=-6.0)
+    candidate_summary.pop("avg_abs_mae_24h_pct")
+
+    result = _MODULE.compare_validation_runs(
+        {"metadata": _comparison_metadata(), "summary": baseline_summary},
+        {"metadata": _comparison_metadata(), "summary": candidate_summary},
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_avg_mae_24h_pct"
+
+
+def test_compare_validation_runs_requires_90d_metrics_to_support_evidence_backed():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(
+            signal_count=60,
+            primary_label_complete_count=60,
+            precision_before_dd8=0.5,
+            avg_abs_mae_24h_pct=10.0,
+        ),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(
+            signal_count=60,
+            primary_label_complete_count=60,
+            precision_before_dd8=0.4,
+            avg_abs_mae_24h_pct=8.0,
+        ),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "not_supported"
+    assert result["reason"] == "metrics_do_not_pass_90d"
+
+
+def test_compare_validation_runs_accepts_evidence_backed_when_90d_supports_change():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(
+            signal_count=60,
+            primary_label_complete_count=60,
+            precision_before_dd8=0.5,
+            avg_abs_mae_24h_pct=10.0,
+        ),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(
+            signal_count=60,
+            primary_label_complete_count=60,
+            precision_before_dd8=0.6,
+            avg_abs_mae_24h_pct=8.0,
+        ),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
     assert result["status"] == "evidence_backed"
     assert result["reason"] == "metrics_pass"
-    assert result["baseline_avg_abs_mae_24h_pct"] == 6.0
-    assert result["candidate_avg_abs_mae_24h_pct"] == 7.0
-    assert result["baseline_avg_mae_24h_pct"] == -10.0
-    assert result["candidate_avg_mae_24h_pct"] == -4.0
-    assert result["abs_mae_path_risk_pass"] is False
-    assert result["signed_mae_path_risk_pass"] is True
-    assert result["mae_path_risk_passes"] == ["avg_mae_24h_pct_abs_distance"]
-    assert result["path_risk_pass"] is True
 
 
 def test_compare_validation_runs_requires_precision_metric():

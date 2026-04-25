@@ -44,6 +44,7 @@ PRIMARY_LABEL = "+10_before_-8"
 PRIMARY_HORIZON_HOURS = 24
 MINIMUM_BASELINE_COMPLETE_COUNT = 20
 MINIMUM_CANDIDATE_COMPLETE_COUNT = 10
+MAX_SAFE_COMPARISON_INT_ABS = sys.maxsize
 COVERAGE_TRUST_THRESHOLD = 0.95
 COMPARISON_MATCH_FIELDS = (
     "window_start",
@@ -1539,25 +1540,43 @@ def _comparison_artifact_parts(artifact: Any, artifact_name: str) -> tuple[dict[
     return metadata, summary
 
 
+def _invalid_comparison_metric(field_name: str) -> dict[str, Any]:
+    return {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+
+
 def _safe_finite_int(summary: dict[str, Any], key: str, field_name: str) -> tuple[int | None, dict[str, Any] | None]:
     raw = summary.get(key, 0)
+    if isinstance(raw, bool):
+        return None, _invalid_comparison_metric(field_name)
+    if isinstance(raw, int):
+        if abs(raw) > MAX_SAFE_COMPARISON_INT_ABS:
+            return None, _invalid_comparison_metric(field_name)
+        return raw, None
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    except (OverflowError, TypeError, ValueError):
+        return None, _invalid_comparison_metric(field_name)
     if not math.isfinite(value) or not value.is_integer():
-        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
-    return int(value), None
+        return None, _invalid_comparison_metric(field_name)
+    try:
+        int_value = int(value)
+    except (OverflowError, TypeError, ValueError):
+        return None, _invalid_comparison_metric(field_name)
+    if abs(int_value) > MAX_SAFE_COMPARISON_INT_ABS:
+        return None, _invalid_comparison_metric(field_name)
+    return int_value, None
 
 
 def _safe_finite_float(summary: dict[str, Any], key: str, field_name: str) -> tuple[float | None, dict[str, Any] | None]:
     raw = summary.get(key, 0.0)
+    if isinstance(raw, bool):
+        return None, _invalid_comparison_metric(field_name)
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    except (OverflowError, TypeError, ValueError):
+        return None, _invalid_comparison_metric(field_name)
     if not math.isfinite(value):
-        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+        return None, _invalid_comparison_metric(field_name)
     return value, None
 
 
@@ -1767,7 +1786,9 @@ def _reject_non_standard_json_constant(value: str) -> None:
 def _validate_finite_json_numbers(value: Any, context: str, path: str = "$") -> None:
     if isinstance(value, bool):
         return
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        return
+    if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError(f"{context} contains non-finite number at {path}: {value!r}")
         return

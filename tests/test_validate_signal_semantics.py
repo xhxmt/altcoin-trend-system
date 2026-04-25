@@ -825,6 +825,65 @@ def test_compare_validation_runs_returns_invalid_metric_for_bad_numeric_value(ba
     json.dumps(result, allow_nan=False)
 
 
+def test_compare_validation_runs_returns_invalid_metric_for_oversized_json_integer():
+    oversized_integer = 10**400
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": oversized_integer,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.6,
+            "avg_abs_mae_24h_pct": 8.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_signal_count"
+    json.dumps(result, allow_nan=False)
+
+
+def test_numeric_safety_helpers_do_not_raise_for_oversized_integer():
+    oversized_integer = 10**400
+
+    _MODULE._validate_finite_json_numbers({"metadata_only": oversized_integer}, "test artifact")
+    int_value, int_error = _MODULE._safe_finite_int({"signal_count": oversized_integer}, "signal_count", "signal_count")
+    float_value, float_error = _MODULE._safe_finite_float(
+        {"precision_before_dd8": oversized_integer},
+        "precision_before_dd8",
+        "precision_before_dd8",
+    )
+
+    assert int_value is None
+    assert int_error == {
+        "status": "insufficient",
+        "reason": "invalid_comparison_metric",
+        "invalid_field": "signal_count",
+    }
+    assert float_value is None
+    assert float_error == {
+        "status": "insufficient",
+        "reason": "invalid_comparison_metric",
+        "invalid_field": "precision_before_dd8",
+    }
+
+
 def test_compare_validation_runs_rejects_untrusted_baseline_coverage():
     baseline = {
         "metadata": {**_comparison_metadata(), "coverage_status": "insufficient_forward_coverage"},
@@ -1158,6 +1217,72 @@ def test_main_comparison_mode_writes_artifacts_for_overflowing_config_number(tmp
     assert result["status"] == "insufficient"
     assert result["reason"] == "invalid_comparison_config"
     assert "non-finite number" in result["error"]
+    assert "NaN" not in artifact_text
+    assert "Infinity" not in artifact_text
+    assert "comparison_path=" in capsys.readouterr().out
+
+
+def test_main_comparison_mode_writes_artifacts_for_oversized_integer_metric(tmp_path, monkeypatch, capsys):
+    summary_path = tmp_path / "summary.json"
+    candidate_summary_path = tmp_path / "candidate-summary.json"
+    metadata_path = tmp_path / "metadata.json"
+    bad_config_path = tmp_path / "bad-config.json"
+    candidate_config_path = tmp_path / "candidate-config.json"
+    output_root = tmp_path / "comparison-output"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "signal_count": 10**400,
+                "primary_label_complete_count": 30,
+                "precision_before_dd8": 0.5,
+                "avg_abs_mae_24h_pct": 10.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_summary_path.write_text(
+        json.dumps(
+            {
+                "signal_count": 30,
+                "primary_label_complete_count": 30,
+                "precision_before_dd8": 0.6,
+                "avg_abs_mae_24h_pct": 8.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    metadata_path.write_text(json.dumps(_comparison_metadata()), encoding="utf-8")
+    bad_config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+    candidate_config_path.write_text(
+        json.dumps({"summary_path": "candidate-summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_ultra_signal_production.py",
+            "--compare-baseline-config",
+            str(bad_config_path),
+            "--compare-candidate-config",
+            str(candidate_config_path),
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    assert _MODULE.main() == 0
+
+    comparison_paths = list(output_root.glob("*-comparison.json"))
+    assert len(comparison_paths) == 1
+    artifact_text = comparison_paths[0].read_text(encoding="utf-8")
+    result = json.loads(artifact_text)
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_signal_count"
     assert "NaN" not in artifact_text
     assert "Infinity" not in artifact_text
     assert "comparison_path=" in capsys.readouterr().out

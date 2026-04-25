@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pandas as pd
@@ -20,112 +24,94 @@ from altcoin_trend.trade_backtest import (
     summarize_signal_v2_groups,
 )
 
+sys.modules.setdefault(__name__, ModuleType(__name__))
+
 DEFAULT_OUTPUT_ROOT = "artifacts/autoresearch"
 SUMMARY_FILENAME = "summary.json"
 SIGNALS_FILENAME = "signals.csv"
 METADATA_FILENAME = "metadata.json"
 README_FILENAME = "README.md"
+VALIDATOR_VERSION = "signal_validation_trust_v1.1"
+MARKET_1M_TIMESTAMP_SEMANTICS = "minute_open_utc"
+TIMESTAMP_SEMANTICS = "hour_bucket_start_utc"
+ENTRY_POLICY = "hour_close_proxy"
+FORWARD_SCAN_START_POLICY = "signal_available_at_inclusive"
+PRIMARY_LABEL = "+10_before_-8"
+PRIMARY_HORIZON_HOURS = 24
 
-SIGNAL_FAMILY_CONFIGS: dict[str, dict[str, Any]] = {
-    "ultra_high_conviction": {
-        "slug": "ultra",
-        "title": "Ultra High Conviction",
-        "count_key": "ultra_signal_count",
-        "required_features": [
-            "return_1h_pct",
-            "return_4h_pct",
-            "return_24h_pct",
-            "return_30d_pct",
-            "volume_ratio_24h",
-            "return_24h_rank",
-            "return_24h_percentile",
-            "return_7d_percentile",
-            "return_30d_percentile",
-            "quality_score",
-            "breakout_20d",
-            "ultra_high_conviction",
-        ],
-    },
-    "ignition": {
-        "slug": "ignition",
-        "title": "Ignition",
-        "count_key": "ignition_signal_count",
-        "required_features": [
-            "return_1h_pct",
-            "return_4h_pct",
-            "return_24h_pct",
-            "return_24h_rank",
-            "return_24h_percentile",
-            "relative_strength_score",
-            "quality_score",
-            "volume_ratio_24h",
-            "volume_breakout_score",
-            "derivatives_score",
-            "ignition_grade",
-            "chase_risk_score",
-            "risk_flags",
-        ],
-    },
-    "ignition_A": {
-        "slug": "ignition-a",
-        "title": "Ignition A",
-        "count_key": "ignition_a_signal_count",
-        "required_features": [
-            "return_1h_pct",
-            "return_4h_pct",
-            "return_24h_pct",
-            "return_24h_rank",
-            "return_24h_percentile",
-            "relative_strength_score",
-            "quality_score",
-            "volume_ratio_24h",
-            "volume_breakout_score",
-            "derivatives_score",
-            "ignition_grade",
-            "chase_risk_score",
-            "risk_flags",
-        ],
-    },
-    "ignition_B": {
-        "slug": "ignition-b",
-        "title": "Ignition B",
-        "count_key": "ignition_b_signal_count",
-        "required_features": [
-            "return_1h_pct",
-            "return_4h_pct",
-            "return_24h_pct",
-            "return_24h_rank",
-            "return_24h_percentile",
-            "relative_strength_score",
-            "quality_score",
-            "volume_ratio_24h",
-            "volume_breakout_score",
-            "derivatives_score",
-            "ignition_grade",
-            "chase_risk_score",
-            "risk_flags",
-        ],
-    },
-    "ignition_EXTREME": {
-        "slug": "ignition-extreme",
-        "title": "Ignition EXTREME",
-        "count_key": "ignition_extreme_signal_count",
-        "required_features": [
-            "return_1h_pct",
-            "return_4h_pct",
-            "return_24h_pct",
-            "return_24h_rank",
-            "return_24h_percentile",
-            "relative_strength_score",
-            "quality_score",
-            "volume_ratio_24h",
-            "volume_breakout_score",
-            "derivatives_score",
-            "ignition_grade",
-            "chase_risk_score",
-            "risk_flags",
-        ],
-    },
+
+@dataclass(frozen=True)
+class SignalFamilyDefinition:
+    name: str
+    title: str
+    count_key: str
+    candidate_column: str
+    grade_column: str | None
+    required_columns: Sequence[str]
+    grades: Sequence[str] = ()
+    emit_gate_flow: bool = False
+
+
+@dataclass(frozen=True)
+class SignalSelector:
+    family: SignalFamilyDefinition
+    grade: str | None = None
+
+    @property
+    def label(self) -> str:
+        return f"{self.family.name}_{self.grade}" if self.grade else self.family.name
+
+
+_COMMON_SIGNAL_COLUMNS = ("exchange", "symbol", "ts")
+SIGNAL_FAMILY_REGISTRY: dict[str, SignalFamilyDefinition] = {
+    "continuation": SignalFamilyDefinition(
+        name="continuation",
+        title="Continuation",
+        count_key="continuation_count",
+        candidate_column="signal_v2_continuation_candidate",
+        grade_column="signal_v2_continuation_grade",
+        required_columns=(
+            *_COMMON_SIGNAL_COLUMNS,
+            "signal_v2_continuation_candidate",
+            "signal_v2_continuation_grade",
+        ),
+        grades=("A", "B", "C"),
+    ),
+    "ignition": SignalFamilyDefinition(
+        name="ignition",
+        title="Ignition",
+        count_key="ignition_count",
+        candidate_column="signal_v2_ignition_candidate",
+        grade_column="signal_v2_ignition_grade",
+        required_columns=(
+            *_COMMON_SIGNAL_COLUMNS,
+            "signal_v2_ignition_candidate",
+            "signal_v2_ignition_grade",
+        ),
+        grades=("A", "B", "C"),
+    ),
+    "reacceleration": SignalFamilyDefinition(
+        name="reacceleration",
+        title="Reacceleration",
+        count_key="reacceleration_count",
+        candidate_column="signal_v2_reacceleration_candidate",
+        grade_column="signal_v2_reacceleration_grade",
+        required_columns=(
+            *_COMMON_SIGNAL_COLUMNS,
+            "signal_v2_reacceleration_candidate",
+            "signal_v2_reacceleration_grade",
+        ),
+        grades=("A", "B", "C"),
+    ),
+    "ultra_high_conviction": SignalFamilyDefinition(
+        name="ultra_high_conviction",
+        title="Ultra High Conviction",
+        count_key="ultra_high_conviction_count",
+        candidate_column="ultra_high_conviction",
+        grade_column=None,
+        required_columns=(*_COMMON_SIGNAL_COLUMNS, "ultra_high_conviction"),
+        emit_gate_flow=True,
+    ),
 }
 
 
@@ -142,30 +128,61 @@ def _parse_datetime(value: str) -> datetime:
     return _coerce_utc_datetime(parsed)
 
 
-def _normalize_signal_family(value: str) -> str:
-    normalized = value.strip()
+def parse_signal_selector(raw: str) -> SignalSelector:
+    normalized = raw.strip().lower()
     if normalized == "ultra":
         normalized = "ultra_high_conviction"
-    if normalized not in SIGNAL_FAMILY_CONFIGS:
-        supported = ", ".join(sorted(SIGNAL_FAMILY_CONFIGS))
-        raise ValueError(f"unsupported signal family: {value}. supported values: {supported}")
-    return normalized
+
+    family_name = normalized
+    grade: str | None = None
+    if len(normalized) > 2 and normalized[-2] == "_" and normalized[-1] in {"a", "b", "c"}:
+        family_name = normalized[:-2]
+        grade = normalized[-1].upper()
+
+    family = SIGNAL_FAMILY_REGISTRY.get(family_name)
+    if family is None or (grade is not None and grade not in family.grades):
+        raise ValueError(f"unsupported signal selector: {raw}")
+    return SignalSelector(family=family, grade=grade)
 
 
-def _signal_family_slug(signal_family: str) -> str:
-    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["slug"])
+def _coerce_signal_selector(value: str | SignalSelector) -> SignalSelector:
+    if isinstance(value, SignalSelector):
+        return value
+    return parse_signal_selector(value)
 
 
-def _signal_family_title(signal_family: str) -> str:
-    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["title"])
+def _normalize_signal_family(value: str | SignalSelector) -> str:
+    return _coerce_signal_selector(value).label
 
 
-def _signal_count_key(signal_family: str) -> str:
-    return str(SIGNAL_FAMILY_CONFIGS[signal_family]["count_key"])
+def _signal_family_slug(signal_family: str | SignalSelector) -> str:
+    return _coerce_signal_selector(signal_family).label.replace("_", "-")
 
 
-def _required_features(signal_family: str) -> list[str]:
-    return list(SIGNAL_FAMILY_CONFIGS[signal_family]["required_features"])
+def _signal_family_title(signal_family: str | SignalSelector) -> str:
+    selector = _coerce_signal_selector(signal_family)
+    return f"{selector.family.title} {selector.grade}" if selector.grade else selector.family.title
+
+
+def _signal_count_key(signal_family: str | SignalSelector) -> str:
+    return _coerce_signal_selector(signal_family).family.count_key
+
+
+def _legacy_signal_count_key(signal_family: str | SignalSelector) -> str:
+    selector = _coerce_signal_selector(signal_family)
+    prefix = selector.family.name if selector.family.name != "ultra_high_conviction" else "ultra"
+    if selector.grade:
+        return f"{prefix}_{selector.grade.lower()}_signal_count"
+    return f"{prefix}_signal_count"
+
+
+def _required_features(signal_family: str | SignalSelector) -> list[str]:
+    selector = _coerce_signal_selector(signal_family)
+    required = list(selector.family.required_columns)
+    legacy_grade_column = f"{selector.family.name}_grade"
+    if selector.family.grade_column and legacy_grade_column not in required:
+        required.append(legacy_grade_column)
+    return required
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -206,15 +223,37 @@ def _optional_float(value: Any) -> float | None:
     return None if pd.isna(numeric) else numeric
 
 
-def _select_signal_rows(window: pd.DataFrame, signal_family: str) -> pd.DataFrame:
-    if signal_family == "ultra_high_conviction":
-        return window[window["ultra_high_conviction"].fillna(False).eq(True)].copy()
-    if signal_family == "ignition":
-        return window[window["ignition_grade"].notna()].copy()
-    if signal_family.startswith("ignition_"):
-        grade = signal_family.split("_", 1)[1]
-        return window[window["ignition_grade"].fillna("").astype(str).eq(grade)].copy()
-    raise ValueError(f"unsupported signal family: {signal_family}")
+def _truthy_signal_mask(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).eq(True)
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    return normalized.isin({"1", "true", "t", "yes", "y"})
+
+
+def _select_signal_rows(window: pd.DataFrame, signal_family: str | SignalSelector) -> pd.DataFrame:
+    selector = _coerce_signal_selector(signal_family)
+    missing = [column for column in selector.family.required_columns if column not in window.columns]
+    if missing:
+        columns = ", ".join(missing)
+        raise ValueError(f"missing required columns for {selector.label}: {columns}")
+
+    candidate_mask = _truthy_signal_mask(window[selector.family.candidate_column])
+    if selector.grade is not None:
+        if selector.family.grade_column is None:
+            raise ValueError(f"unsupported signal selector: {selector.label}")
+        grade_mask = window[selector.family.grade_column].fillna("").astype(str).str.upper().eq(selector.grade)
+        candidate_mask &= grade_mask
+
+    selected = window[candidate_mask].copy()
+    selected["signal_family"] = selector.family.name
+    if selector.grade is not None:
+        selected["signal_grade"] = selector.grade
+    elif selector.family.grade_column is not None:
+        selected["signal_grade"] = selected[selector.family.grade_column].fillna("").astype(str)
+    else:
+        selected["signal_grade"] = ""
+    selected["signal_selector"] = selector.label
+    return selected
 
 
 def summarize_evaluated_signals(
@@ -235,11 +274,16 @@ def summarize_evaluated_signals(
         if row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None
     )
 
-    count_key = _signal_count_key(signal_family)
+    selector = _coerce_signal_selector(signal_family)
+    count_key = _signal_count_key(selector)
+    legacy_count_key = _legacy_signal_count_key(selector)
+    count_values = {count_key: signal_count}
+    if legacy_count_key != count_key:
+        count_values[legacy_count_key] = signal_count
     return {
-        "signal_family": signal_family,
+        "signal_family": selector.label,
         "signal_count": signal_count,
-        count_key: signal_count,
+        **count_values,
         "hit_10_1h_count": hit_1h_count,
         "hit_10_4h_count": hit_4h_count,
         "hit_10_24h_count": hit_24h_count,
@@ -458,6 +502,7 @@ def evaluate_signal_family(
                 "close": float(row["close"]),
                 "continuation_grade": row.get("continuation_grade"),
                 "ignition_grade": row.get("ignition_grade"),
+                "reacceleration_grade": row.get("reacceleration_grade"),
                 "ultra_high_conviction": bool(row.get("ultra_high_conviction", False)),
                 "signal_priority": int(row["signal_priority"]) if _optional_float(row.get("signal_priority")) is not None else None,
                 "return_1h_pct": float(row["return_1h_pct"]),
@@ -634,6 +679,7 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     outputs = metadata["expected_outputs"]
     signal_family = _normalize_signal_family(str(metadata.get("signal_family", "ultra_high_conviction")))
     count_key = _signal_count_key(signal_family)
+    legacy_count_key = _legacy_signal_count_key(signal_family)
     count_value = summary.get(count_key, summary.get("signal_count", 0))
     lines = [
         f"# {_signal_family_title(signal_family)} Production Validation",
@@ -660,22 +706,28 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
         "## Snapshot",
         "",
         f"- {count_key}: {count_value}",
-        f"- signal_count: {summary.get('signal_count', count_value)}",
-        f"- precision_1h: {summary['precision_1h']}",
-        f"- precision_4h: {summary['precision_4h']}",
-        f"- precision_24h: {summary['precision_24h']}",
-        f"- precision_before_dd8: {summary['precision_before_dd8']}",
-        f"- hit_10pct_first_rate: {summary['hit_10pct_first_rate']}",
-        f"- drawdown_8pct_first_rate: {summary['drawdown_8pct_first_rate']}",
-        f"- avg_mfe_24h_pct: {summary['avg_mfe_24h_pct']}",
-        f"- avg_mae_24h_pct: {summary['avg_mae_24h_pct']}",
-        f"- avg_mfe_before_dd8_pct: {summary['avg_mfe_before_dd8_pct']}",
-        f"- avg_mae_before_hit_10pct: {summary['avg_mae_before_hit_10pct']}",
-        f"- avg_mae_after_hit_10pct: {summary['avg_mae_after_hit_10pct']}",
-        f"- median_time_to_hit_10pct_minutes: {summary['median_time_to_hit_10pct_minutes']}",
-        f"- median_time_to_drawdown_8pct_minutes: {summary['median_time_to_drawdown_8pct_minutes']}",
-        "",
     ]
+    if legacy_count_key != count_key:
+        lines.append(f"- {legacy_count_key}: {summary.get(legacy_count_key, count_value)}")
+    lines.extend(
+        [
+            f"- signal_count: {summary.get('signal_count', count_value)}",
+            f"- precision_1h: {summary['precision_1h']}",
+            f"- precision_4h: {summary['precision_4h']}",
+            f"- precision_24h: {summary['precision_24h']}",
+            f"- precision_before_dd8: {summary['precision_before_dd8']}",
+            f"- hit_10pct_first_rate: {summary['hit_10pct_first_rate']}",
+            f"- drawdown_8pct_first_rate: {summary['drawdown_8pct_first_rate']}",
+            f"- avg_mfe_24h_pct: {summary['avg_mfe_24h_pct']}",
+            f"- avg_mae_24h_pct: {summary['avg_mae_24h_pct']}",
+            f"- avg_mfe_before_dd8_pct: {summary['avg_mfe_before_dd8_pct']}",
+            f"- avg_mae_before_hit_10pct: {summary['avg_mae_before_hit_10pct']}",
+            f"- avg_mae_after_hit_10pct: {summary['avg_mae_after_hit_10pct']}",
+            f"- median_time_to_hit_10pct_minutes: {summary['median_time_to_hit_10pct_minutes']}",
+            f"- median_time_to_drawdown_8pct_minutes: {summary['median_time_to_drawdown_8pct_minutes']}",
+            "",
+        ]
+    )
     group_snapshot_lines = _build_group_snapshot_lines(summary, signal_family)
     if group_snapshot_lines:
         lines.extend(["## Group Snapshot", "", *group_snapshot_lines, ""])

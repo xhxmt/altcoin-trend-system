@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -289,6 +290,65 @@ def _evaluate_target_drawdown_path(
     }
 
 
+def _coerce_valid_entry_price(value: Any) -> float | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) and price > 0.0 else None
+
+
+def _conservative_validation_path_labels(
+    *,
+    signal_start: pd.Timestamp,
+    entry_ts: pd.Timestamp,
+    horizons: Sequence[pd.Timedelta],
+) -> dict[str, Any]:
+    labels: dict[str, Any] = {
+        "signal_ts": signal_start.isoformat(),
+        "signal_available_at": entry_ts.isoformat(),
+        "entry_ts": entry_ts.isoformat(),
+        "entry_price": None,
+        "entry_policy": ENTRY_POLICY,
+        "invalid_entry_price": True,
+        "label_error": "invalid_entry_price",
+        "path_results": {},
+        "ambiguous_same_bar": False,
+        "path_order": "unresolved",
+        "next_minute_open_entry_price": None,
+        "next_minute_open_entry_return_delta_pct": None,
+        "hit_10pct_before_drawdown_8pct": False,
+        "hit_10_before_dd8": False,
+        "hit_10pct_first": False,
+        "drawdown_8pct_first": False,
+        "time_to_hit_10pct_minutes": None,
+        "time_to_drawdown_8pct_minutes": None,
+        "mfe_before_dd8_pct": 0.0,
+        "mae_before_hit_10pct": 0.0,
+        "mae_after_hit_10pct": None,
+    }
+    for horizon in horizons:
+        hours = int(horizon.total_seconds() // 3600)
+        key = f"{hours}h"
+        expected_minutes = int(horizon.total_seconds() // 60)
+        labels[f"label_complete_{key}"] = False
+        labels[f"expected_minutes_{key}"] = expected_minutes
+        labels[f"missing_minutes_{key}"] = expected_minutes
+        labels[f"mfe_{key}_pct"] = 0.0
+        labels[f"mae_{key}_pct"] = 0.0
+        labels[f"abs_mae_{key}_pct"] = 0.0
+        labels[f"hit_10pct_{key}"] = False
+    for target_pct in SENSITIVITY_TARGETS:
+        for drawdown_pct in SENSITIVITY_DRAWDOWNS:
+            labels["path_results"][_path_key(target_pct, drawdown_pct)] = {
+                "hit": False,
+                "path_order": "unresolved",
+                "time_to_hit_minutes": None,
+                "time_to_drawdown_minutes": None,
+            }
+    return labels
+
+
 def _compatibility_path_extremes(
     rows: pd.DataFrame,
     *,
@@ -341,9 +401,16 @@ def compute_validation_path_labels(
     future_rows: pd.DataFrame,
     horizons: Sequence[pd.Timedelta] = (pd.Timedelta(hours=1), pd.Timedelta(hours=4), pd.Timedelta(hours=24)),
 ) -> dict[str, Any]:
-    close = float(entry_price)
     signal_start = hour_bucket_start(signal_ts)
     entry_ts = signal_available_at(signal_start)
+    close = _coerce_valid_entry_price(entry_price)
+    if close is None:
+        return _conservative_validation_path_labels(
+            signal_start=signal_start,
+            entry_ts=entry_ts,
+            horizons=horizons,
+        )
+
     horizon_end = entry_ts + max(horizons)
     future = _prepare_forward_rows(future_rows, entry_ts, horizon_end)
     labels: dict[str, Any] = {
@@ -352,6 +419,8 @@ def compute_validation_path_labels(
         "entry_ts": entry_ts.isoformat(),
         "entry_price": close,
         "entry_policy": ENTRY_POLICY,
+        "invalid_entry_price": False,
+        "label_error": None,
         "path_results": {},
         "ambiguous_same_bar": False,
         "path_order": "unresolved",
@@ -637,7 +706,8 @@ def summarize_evaluated_signals(
     unresolved_24h_count = sum(
         1
         for row in evaluated
-        if row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None
+        if row.get("path_order") == "unresolved"
+        or (row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None)
     )
 
     selector = _coerce_signal_selector(signal_family)
@@ -875,6 +945,8 @@ def evaluate_signal_family(
                 "entry_ts": labels["entry_ts"],
                 "entry_price": labels["entry_price"],
                 "entry_policy": labels["entry_policy"],
+                "invalid_entry_price": bool(labels.get("invalid_entry_price", False)),
+                "label_error": labels.get("label_error"),
                 "asset_id": int(row["asset_id"]),
                 "exchange": row["exchange"],
                 "symbol": row["symbol"],

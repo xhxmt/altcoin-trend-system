@@ -358,3 +358,61 @@ def test_compute_validation_path_labels_handles_empty_forward_rows():
     assert labels["abs_mae_24h_pct"] == 0.0
     assert labels["path_order"] == "unresolved"
     assert labels["hit_10_before_dd8"] is False
+
+
+@pytest.mark.parametrize("entry_price", [0.0, -100.0, float("nan")])
+def test_compute_validation_path_labels_handles_invalid_entry_price_conservatively(entry_price):
+    rows = pd.DataFrame(
+        [
+            {"ts": "2026-04-22T11:00:00Z", "open": 100.0, "high": 1000.0, "low": 1.0},
+        ]
+    )
+
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=entry_price,
+        future_rows=rows,
+    )
+
+    assert labels["invalid_entry_price"] is True
+    assert labels["label_error"] == "invalid_entry_price"
+    assert labels["entry_price"] is None
+    assert labels["label_complete_1h"] is False
+    assert labels["label_complete_4h"] is False
+    assert labels["label_complete_24h"] is False
+    assert labels["missing_minutes_1h"] == 60
+    assert labels["missing_minutes_4h"] == 240
+    assert labels["missing_minutes_24h"] == 1440
+    assert labels["mfe_24h_pct"] == 0.0
+    assert labels["mae_24h_pct"] == 0.0
+    assert labels["abs_mae_24h_pct"] == 0.0
+    assert labels["path_order"] == "unresolved"
+    assert labels["hit_10_before_dd8"] is False
+    assert labels["hit_10pct_before_drawdown_8pct"] is False
+    assert labels["path_results"]["target_10_dd_8"]["hit"] is False
+
+
+def test_summarize_evaluated_signals_counts_v11_unresolved_path_order():
+    summary = _MODULE.summarize_evaluated_signals(
+        [
+            {
+                "hit_10pct_1h": False,
+                "hit_10pct_4h": False,
+                "hit_10pct_24h": False,
+                "hit_10pct_before_drawdown_8pct": False,
+                "hit_10pct_first": False,
+                "drawdown_8pct_first": False,
+                "path_order": "unresolved",
+                "mfe_1h_pct": 0.0,
+                "mfe_24h_pct": 0.0,
+                "mae_24h_pct": 0.0,
+                "mfe_before_dd8_pct": 0.0,
+                "mae_before_hit_10pct": 0.0,
+                "mae_after_hit_10pct": None,
+                "time_to_hit_10pct_minutes": None,
+                "time_to_drawdown_8pct_minutes": None,
+            }
+        ]
+    )
+
+    assert summary["unresolved_24h_count"] == 1

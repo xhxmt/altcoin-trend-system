@@ -1455,6 +1455,18 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _serialize_csv_cell(value: Any) -> Any | str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value), sort_keys=True)
+    if isinstance(value, set):
+        return json.dumps(sorted(str(item) for item in value), sort_keys=True)
+    return value
+
+
 def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1469,6 +1481,7 @@ def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[s
             csv_row["path_results_json"] = json.dumps(row["path_results"], sort_keys=True)
         for column in SIGNALS_MINIMUM_COLUMNS:
             csv_row.setdefault(column, None)
+        csv_row = {key: _serialize_csv_cell(value) for key, value in csv_row.items()}
         csv_rows.append(csv_row)
     extra_columns = sorted({key for row in csv_rows for key in row.keys()} - set(SIGNALS_MINIMUM_COLUMNS))
     with (output_dir / SIGNALS_FILENAME).open("w", newline="", encoding="utf-8") as handle:

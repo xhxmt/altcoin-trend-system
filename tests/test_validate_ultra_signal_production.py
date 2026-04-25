@@ -249,7 +249,10 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
             "path_order": "target_first",
             "z_extra": "last",
             "a_extra": "first",
+            "extra_dict": {"z": 1},
+            "none_extra": None,
             "path_results": {"target_15_dd_12": {"hit": False}, "target_5_dd_8": {"hit": True}},
+            "risk_flags": ["a", "b"],
         }
     ]
     metadata = build_run_metadata(
@@ -289,14 +292,26 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
     signals_lines = (output_dir / SIGNALS_FILENAME).read_text(encoding="utf-8").splitlines()
     header = signals_lines[0].split(",")
     assert header[: len(SIGNALS_MINIMUM_COLUMNS)] == SIGNALS_MINIMUM_COLUMNS
-    assert header[len(SIGNALS_MINIMUM_COLUMNS) :] == ["a_extra", "path_results_json", "z_extra"]
+    assert header[len(SIGNALS_MINIMUM_COLUMNS) :] == [
+        "a_extra",
+        "extra_dict",
+        "none_extra",
+        "path_results_json",
+        "risk_flags",
+        "z_extra",
+    ]
     assert "path_results" not in header
+    assert "['a', 'b']" not in "\n".join(signals_lines)
+    assert "{'z': 1}" not in "\n".join(signals_lines)
     record = next(csv.DictReader(signals_lines))
     assert record["signal_grade"] == ""
     assert record["entry_policy"] == ""
     assert record["a_extra"] == "first"
     assert record["z_extra"] == "last"
+    assert record["extra_dict"] == json.dumps(rows[0]["extra_dict"], sort_keys=True)
+    assert record["none_extra"] == ""
     assert record["path_results_json"] == json.dumps(rows[0]["path_results"], sort_keys=True)
+    assert record["risk_flags"] == json.dumps(rows[0]["risk_flags"], sort_keys=True)
 
 
 def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):

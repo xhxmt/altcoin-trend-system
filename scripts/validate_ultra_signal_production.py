@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import math
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -219,6 +220,31 @@ SIGNAL_FAMILY_REQUIRED_FEATURES: dict[str, Sequence[str]] = {
 
 def _utc_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _current_git_sha(repo_dir: Path | None = None) -> str:
+    cwd = repo_dir or Path(__file__).resolve().parents[1]
+    try:
+        sha_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        sha = sha_result.stdout.strip()
+        if not sha:
+            return "unknown"
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"dirty:{sha}" if status_result.stdout.strip() else sha
 
 
 def _window_slug(value: datetime) -> str:
@@ -1035,6 +1061,8 @@ def evaluate_signal_family(
             "exchange": exchange,
             "from": start_utc.isoformat(),
             "to": end_utc.isoformat(),
+            "market_from": market_start.isoformat(),
+            "market_to": market_end.isoformat(),
             "hourly_rows": 0,
             "feature_rows": 0,
             "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
@@ -1465,6 +1493,7 @@ def main() -> int:
         output_dir=output_dir,
         output_root=output_root,
         signal_family=signal_family,
+        git_sha=_current_git_sha(),
         coverage_status=str(summary.get("coverage_status", "insufficient_forward_coverage")),
         primary_label_complete_count=int(summary.get("primary_label_complete_count", 0)),
         incomplete_label_count=int(summary.get("incomplete_label_count", 0)),

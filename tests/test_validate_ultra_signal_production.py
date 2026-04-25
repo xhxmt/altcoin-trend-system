@@ -22,6 +22,109 @@ summarize_evaluated_signals = _MODULE.summarize_evaluated_signals
 write_artifacts = _MODULE.write_artifacts
 
 
+def test_main_passes_resolved_git_sha_to_metadata(monkeypatch, tmp_path):
+    captured: dict[str, str | None] = {}
+    summary = {
+        "exchange": "binance",
+        "from": "2026-01-22T10:00:00+00:00",
+        "to": "2026-04-22T10:00:00+00:00",
+        "market_from": "2025-12-22T10:00:00+00:00",
+        "market_to": "2026-04-23T11:00:00+00:00",
+        "coverage_status": "trusted",
+        "primary_label_complete_count": 0,
+        "incomplete_label_count": 0,
+        "missing_optional_columns": [],
+    }
+
+    def fake_build_run_metadata(**kwargs):
+        captured["git_sha"] = kwargs.get("git_sha")
+        return {
+            "generated_at": "2026-04-23T12:06:03+00:00",
+            "validation_window": {"from": summary["from"], "to": summary["to"]},
+            "warmup_window": {"from": summary["market_from"], "to": summary["from"]},
+            "forward_window": {"from": summary["to"], "to": summary["market_to"], "horizon": "24h"},
+            "expected_inputs": {"required_features": []},
+            "expected_outputs": {
+                "summary": SUMMARY_FILENAME,
+                "signals": SIGNALS_FILENAME,
+                "metadata": METADATA_FILENAME,
+                "readme": README_FILENAME,
+            },
+            "signal_family": "ultra_high_conviction",
+            "exchange": "binance",
+        }
+
+    monkeypatch.setattr(_MODULE, "_current_git_sha", lambda: "dirty:abc123", raising=False)
+    monkeypatch.setattr(_MODULE, "load_settings", lambda: object())
+    monkeypatch.setattr(_MODULE, "build_engine", lambda settings: object())
+    monkeypatch.setattr(_MODULE, "evaluate_signal_family", lambda *args, **kwargs: (summary, []))
+    monkeypatch.setattr(_MODULE, "build_run_metadata", fake_build_run_metadata)
+    monkeypatch.setattr(_MODULE, "write_artifacts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        _MODULE.sys,
+        "argv",
+        [
+            "validate_ultra_signal_production.py",
+            "--from",
+            "2026-01-22T10:00:00+00:00",
+            "--to",
+            "2026-04-22T10:00:00+00:00",
+            "--output-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert _MODULE.main() == 0
+    assert captured["git_sha"] == "dirty:abc123"
+
+
+def test_current_git_sha_marks_dirty_worktree(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["git", "rev-parse", "--short", "HEAD"]:
+            return type("Result", (), {"stdout": "abc123\n"})()
+        if command == ["git", "status", "--porcelain"]:
+            return type("Result", (), {"stdout": " M scripts/validate_ultra_signal_production.py\n"})()
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", fake_run)
+
+    assert _MODULE._current_git_sha(tmp_path) == "dirty:abc123"
+    assert calls == [["git", "rev-parse", "--short", "HEAD"], ["git", "status", "--porcelain"]]
+
+
+def test_empty_hourly_summary_preserves_market_window_and_artifact_flow(monkeypatch, tmp_path):
+    monkeypatch.setattr(_MODULE, "fetch_hourly_bars", lambda *args, **kwargs: _MODULE.pd.DataFrame())
+
+    start = datetime(2026, 1, 22, 10, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+    summary, rows = _MODULE.evaluate_signal_family(object(), "binance", start, end)
+
+    assert rows == []
+    assert summary["market_from"] == "2025-12-22T10:00:00+00:00"
+    assert summary["market_to"] == "2026-04-23T11:00:00+00:00"
+    metadata = build_run_metadata(
+        exchange="binance",
+        start=start,
+        end=end,
+        market_start=datetime.fromisoformat(summary["market_from"]),
+        market_end=datetime.fromisoformat(summary["market_to"]),
+        output_dir=tmp_path / "run",
+        output_root=tmp_path,
+        coverage_status=str(summary["coverage_status"]),
+        primary_label_complete_count=int(summary["primary_label_complete_count"]),
+        incomplete_label_count=int(summary["incomplete_label_count"]),
+        missing_optional_columns=list(summary["missing_optional_columns"]),
+    )
+
+    write_artifacts(tmp_path / "run", summary, rows, metadata)
+    assert (tmp_path / "run" / SIGNALS_FILENAME).read_text(encoding="utf-8").splitlines() == [
+        ",".join(SIGNALS_MINIMUM_COLUMNS)
+    ]
+
+
 def test_build_run_metadata_captures_validation_contract(tmp_path):
     output_dir = tmp_path / "20260423-120603-production-ultra-binance"
     metadata = build_run_metadata(

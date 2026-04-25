@@ -152,6 +152,42 @@ def test_default_validation_window_rejects_invalid_days():
         _MODULE.default_validation_window(0, now=datetime(2026, 4, 25, tzinfo=timezone.utc))
 
 
+def test_fetch_forward_rows_uses_available_at_inclusive(monkeypatch):
+    captured = {}
+
+    class FakeResult:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class FakeConnection:
+        def execute(self, statement, params):
+            captured["sql"] = str(statement)
+            captured["params"] = params
+            return FakeResult()
+
+    class FakeBegin:
+        def __enter__(self):
+            return FakeConnection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeEngine:
+        def begin(self):
+            return FakeBegin()
+
+    signal_ts = pd.Timestamp("2026-04-22T10:00:00Z").to_pydatetime()
+    _MODULE.fetch_forward_1m_rows(FakeEngine(), 123, signal_ts, pd.Timedelta(hours=24))
+
+    assert "m.ts >= :signal_available_at" in captured["sql"]
+    assert "m.ts < :horizon_end" in captured["sql"]
+    assert captured["params"]["signal_available_at"].isoformat() == "2026-04-22T11:00:00+00:00"
+    assert captured["params"]["horizon_end"].isoformat() == "2026-04-23T11:00:00+00:00"
+
+
 def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypatch):
     signal_ts = pd.Timestamp("2026-04-22T10:00:00Z")
     available_ts = pd.Timestamp("2026-04-22T11:00:00Z")
@@ -185,9 +221,9 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
     monkeypatch.setattr(_MODULE, "fetch_hourly_bars", lambda *args, **kwargs: pd.DataFrame([{"hourly": True}]))
     monkeypatch.setattr(_MODULE, "_prepare_feature_frame", lambda hourly: feature_frame)
 
-    def fake_fetch_forward_1m_rows(engine, asset_id, start_ts, horizon):
+    def fake_fetch_forward_1m_rows(engine, asset_id, signal_ts_arg, horizon):
         captured["fetch_asset_id"] = asset_id
-        captured["fetch_start_ts"] = pd.Timestamp(start_ts)
+        captured["fetch_signal_ts"] = pd.Timestamp(signal_ts_arg)
         captured["fetch_horizon"] = horizon
         return pd.DataFrame([{"ts": available_ts, "high": 111.0, "low": 99.0}])
 
@@ -248,7 +284,7 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
     )
 
     assert rows[0]["ts"] == "2026-04-22T10:00:00+00:00"
-    assert captured["fetch_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
+    assert captured["fetch_signal_ts"].isoformat() == "2026-04-22T10:00:00+00:00"
     assert captured["label_signal_ts"].isoformat() == "2026-04-22T10:00:00+00:00"
     assert rows[0]["signal_available_at"] == "2026-04-22T11:00:00+00:00"
     assert rows[0]["entry_ts"] == "2026-04-22T11:00:00+00:00"

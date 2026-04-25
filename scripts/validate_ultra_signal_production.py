@@ -866,7 +866,9 @@ def fetch_hourly_bars(engine: Engine, exchange: str, start: datetime, end: datet
     return pd.DataFrame(rows)
 
 
-def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd.Timestamp, horizon: timedelta) -> pd.DataFrame:
+def fetch_forward_1m_rows(engine: Engine, asset_id: int, signal_ts: datetime | pd.Timestamp, horizon: timedelta) -> pd.DataFrame:
+    signal_available = signal_available_at(signal_ts).to_pydatetime()
+    horizon_end = (pd.Timestamp(signal_available) + pd.Timedelta(horizon)).to_pydatetime()
     statement = text(
         """
         SELECT
@@ -876,17 +878,15 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd
             m.low
         FROM alt_core.market_1m AS m
         WHERE m.asset_id = :asset_id
-          AND m.ts >= :start_ts
+          AND m.ts >= :signal_available_at
           AND m.ts < :horizon_end
         ORDER BY m.ts
         """
     )
-    start_ts_utc = _coerce_utc_timestamp_value(start_ts).to_pydatetime()
-    horizon_end = (pd.Timestamp(start_ts_utc) + horizon).to_pydatetime()
     with engine.begin() as connection:
         rows = connection.execute(
             statement,
-            {"asset_id": asset_id, "start_ts": start_ts_utc, "horizon_end": horizon_end},
+            {"asset_id": asset_id, "signal_available_at": signal_available, "horizon_end": horizon_end},
         ).mappings().all()
     return pd.DataFrame(rows)
 
@@ -930,8 +930,7 @@ def evaluate_signal_family(
     evaluated: list[dict[str, Any]] = []
     for row in signals.sort_values(["ts", "symbol"]).to_dict("records"):
         signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
-        available_ts = signal_available_at(signal_ts)
-        future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), available_ts, timedelta(hours=24))
+        future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), signal_ts, timedelta(hours=24))
         labels = compute_validation_path_labels(
             signal_ts=signal_ts,
             entry_price=float(row["close"]),

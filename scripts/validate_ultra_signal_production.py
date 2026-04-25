@@ -60,6 +60,7 @@ COMPARISON_MATCH_FIELDS = (
     "forward_scan_start_policy",
     "primary_label",
     "horizon_hours",
+    "validator_version",
 )
 SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
 SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
@@ -1856,6 +1857,21 @@ def compare_validation_runs(
         window_error = _validate_required_90d_window(ninety_day_candidate_metadata, "candidate_90d")
         if window_error is not None:
             return {**evidence, **window_error}
+    primary_window_end = baseline_metadata.get("window_end")
+    for artifact_name, metadata in (
+        ("baseline_90d", ninety_day_baseline_metadata),
+        ("candidate_90d", ninety_day_candidate_metadata),
+    ):
+        if metadata is not None and metadata.get("window_end") != primary_window_end:
+            return {
+                **evidence,
+                "status": "insufficient",
+                "reason": "comparison_90d_context_mismatch",
+                "mismatched_90d_field": "window_end",
+                "mismatched_90d_artifact": artifact_name,
+                "primary_window_end": primary_window_end,
+                "comparison_90d_window_end": metadata.get("window_end"),
+            }
     if ninety_day_baseline_metadata is not None and ninety_day_candidate_metadata is not None:
         for field in COMPARISON_MATCH_FIELDS:
             if ninety_day_baseline_metadata.get(field) != ninety_day_candidate_metadata.get(field):

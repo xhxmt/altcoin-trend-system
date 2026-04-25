@@ -663,6 +663,7 @@ def _comparison_metadata(window_start="2026-03-25T00:00:00+00:00", window_end="2
         "forward_scan_start_policy": "signal_available_at_inclusive",
         "primary_label": "+10_before_-8",
         "horizon_hours": 24,
+        "validator_version": "v1.1",
         "coverage_status": "trusted",
         "rule_version": "rule:v1",
         "git_sha": "abc123",
@@ -704,6 +705,7 @@ def test_compare_validation_runs_rejects_window_mismatch():
         ("market_1m_timestamp_semantics", "minute_close_utc"),
         ("forward_scan_start_policy", "entry_ts_exclusive"),
         ("horizon_hours", 48),
+        ("validator_version", "v1.0"),
     ],
 )
 def test_compare_validation_runs_rejects_timestamp_and_horizon_semantic_mismatch(field, candidate_value):
@@ -1265,6 +1267,44 @@ def test_compare_validation_runs_rejects_90d_context_mismatch(candidate_metadata
     assert result["status"] == "insufficient"
     assert result["reason"] == "comparison_90d_context_mismatch"
     assert result["mismatched_90d_field"] == mismatched_field
+
+
+def test_compare_validation_runs_rejects_90d_window_end_mismatched_from_primary_window_end():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(
+            window_start="2026-01-25T00:00:00+00:00",
+            window_end="2026-04-25T00:00:00+00:00",
+        ),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(
+            window_start="2026-01-25T00:00:00+00:00",
+            window_end="2026-04-25T00:00:00+00:00",
+        ),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_90d_context_mismatch"
+    assert result["mismatched_90d_field"] == "window_end"
 
 
 @pytest.mark.parametrize(

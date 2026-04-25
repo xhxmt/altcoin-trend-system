@@ -1420,9 +1420,6 @@ def write_artifacts(output_dir: Path, summary: dict[str, Any], rows: list[dict[s
     (output_dir / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (output_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (output_dir / README_FILENAME).write_text(build_run_readme(summary, metadata), encoding="utf-8")
-    if not rows:
-        (output_dir / SIGNALS_FILENAME).write_text("", encoding="utf-8")
-        return
     csv_rows = []
     for row in rows:
         csv_row = dict(row)

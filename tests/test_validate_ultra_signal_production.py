@@ -1,3 +1,4 @@
+import csv
 import json
 import importlib.util
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ METADATA_FILENAME = _MODULE.METADATA_FILENAME
 README_FILENAME = _MODULE.README_FILENAME
 SIGNALS_FILENAME = _MODULE.SIGNALS_FILENAME
 SUMMARY_FILENAME = _MODULE.SUMMARY_FILENAME
+SIGNALS_MINIMUM_COLUMNS = _MODULE.SIGNALS_MINIMUM_COLUMNS
 build_run_metadata = _MODULE.build_run_metadata
 summarize_ultra_gate_flow = _MODULE.summarize_ultra_gate_flow
 summarize_evaluated_signals = _MODULE.summarize_evaluated_signals
@@ -99,12 +101,10 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
             "exchange": "binance",
             "symbol": "HIGHUSDT",
             "signal_family": "ultra_high_conviction",
-            "signal_grade": "",
             "signal_ts": "2026-04-22T10:00:00+00:00",
             "signal_available_at": "2026-04-22T11:00:00+00:00",
             "entry_ts": "2026-04-22T11:00:00+00:00",
             "entry_price": 100.0,
-            "entry_policy": "hour_close_proxy",
             "label_complete_24h": True,
             "hit_10_before_dd8": True,
             "mfe_24h_pct": 12.0,
@@ -112,6 +112,9 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
             "abs_mae_24h_pct": 4.0,
             "time_to_hit_10pct_minutes": 12.0,
             "path_order": "target_first",
+            "z_extra": "last",
+            "a_extra": "first",
+            "path_results": {"target_15_dd_12": {"hit": False}, "target_5_dd_8": {"hit": True}},
         }
     ]
     metadata = build_run_metadata(
@@ -148,6 +151,17 @@ def test_write_artifacts_writes_summary_signals_metadata_and_readme(tmp_path):
     assert "forward_scan_start_policy: signal_available_at_inclusive" in readme
     assert "hit10_24h_rate" in readme
     assert "avg_abs_mae_24h_pct" in readme
+    signals_lines = (output_dir / SIGNALS_FILENAME).read_text(encoding="utf-8").splitlines()
+    header = signals_lines[0].split(",")
+    assert header[: len(SIGNALS_MINIMUM_COLUMNS)] == SIGNALS_MINIMUM_COLUMNS
+    assert header[len(SIGNALS_MINIMUM_COLUMNS) :] == ["a_extra", "path_results_json", "z_extra"]
+    assert "path_results" not in header
+    record = next(csv.DictReader(signals_lines))
+    assert record["signal_grade"] == ""
+    assert record["entry_policy"] == ""
+    assert record["a_extra"] == "first"
+    assert record["z_extra"] == "last"
+    assert record["path_results_json"] == json.dumps(rows[0]["path_results"], sort_keys=True)
 
 
 def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
@@ -190,7 +204,8 @@ def test_write_artifacts_creates_empty_signals_file_when_no_rows(tmp_path):
 
     write_artifacts(output_dir, summary, [], metadata)
 
-    assert (output_dir / SIGNALS_FILENAME).read_text(encoding="utf-8") == ""
+    signals_lines = (output_dir / SIGNALS_FILENAME).read_text(encoding="utf-8").splitlines()
+    assert signals_lines == [",".join(SIGNALS_MINIMUM_COLUMNS)]
 
 
 def test_summarize_ultra_gate_flow_counts_cumulative_stage_passes():

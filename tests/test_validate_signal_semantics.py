@@ -818,6 +818,10 @@ def test_compare_validation_runs_returns_invalid_metric_for_bad_numeric_value(ba
     assert result["status"] == "insufficient"
     assert result["reason"] == "invalid_comparison_metric"
     assert result["invalid_field"] == "baseline_precision_before_dd8"
+    assert result["baseline_signal_count"] == 30
+    assert result["candidate_signal_count"] == 30
+    assert result["baseline_primary_label_complete_count"] == 30
+    assert result["candidate_primary_label_complete_count"] == 30
     json.dumps(result, allow_nan=False)
 
 
@@ -1032,6 +1036,39 @@ def test_load_comparison_config_rejects_missing_required_paths(tmp_path, config)
 
     with pytest.raises(ValueError, match="comparison config .* requires summary_path and metadata_path"):
         _MODULE.load_comparison_config(str(config_path))
+
+
+def test_main_comparison_mode_writes_artifacts_for_bad_config(tmp_path, monkeypatch, capsys):
+    bad_config_path = tmp_path / "bad-config.json"
+    candidate_config_path = tmp_path / "candidate-config.json"
+    output_root = tmp_path / "comparison-output"
+    bad_config_path.write_text(json.dumps({"metadata_path": "metadata.json"}), encoding="utf-8")
+    candidate_config_path.write_text(json.dumps({"metadata_path": "metadata.json"}), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_ultra_signal_production.py",
+            "--compare-baseline-config",
+            str(bad_config_path),
+            "--compare-candidate-config",
+            str(candidate_config_path),
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    assert _MODULE.main() == 0
+
+    comparison_paths = list(output_root.glob("*-comparison.json"))
+    readme_paths = list(output_root.glob("*-comparison_README.md"))
+    assert len(comparison_paths) == 1
+    assert len(readme_paths) == 1
+    result = json.loads(comparison_paths[0].read_text(encoding="utf-8"))
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_config"
+    assert "requires summary_path and metadata_path" in result["error"]
+    assert "comparison_path=" in capsys.readouterr().out
 
 
 def test_rule_config_hash_changes_when_rule_config_changes():

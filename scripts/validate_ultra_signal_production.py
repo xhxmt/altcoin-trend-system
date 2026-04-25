@@ -1609,40 +1609,43 @@ def compare_validation_runs(
     )
     if error is not None:
         return {**metadata_evidence, **error}
+    count_evidence = {
+        **metadata_evidence,
+        "baseline_signal_count": baseline_signal_count,
+        "candidate_signal_count": candidate_signal_count,
+        "baseline_primary_label_complete_count": baseline_count,
+        "candidate_primary_label_complete_count": candidate_count,
+    }
     baseline_precision, error = _safe_finite_float(
         baseline_summary,
         "precision_before_dd8",
         "baseline_precision_before_dd8",
     )
     if error is not None:
-        return {**metadata_evidence, **error}
+        return {**count_evidence, **error}
     candidate_precision, error = _safe_finite_float(
         candidate_summary,
         "precision_before_dd8",
         "candidate_precision_before_dd8",
     )
     if error is not None:
-        return {**metadata_evidence, **error}
+        return {**count_evidence, **error}
     baseline_abs_mae, error = _safe_finite_float(
         baseline_summary,
         "avg_abs_mae_24h_pct",
         "baseline_avg_abs_mae_24h_pct",
     )
     if error is not None:
-        return {**metadata_evidence, **error}
+        return {**count_evidence, **error}
     candidate_abs_mae, error = _safe_finite_float(
         candidate_summary,
         "avg_abs_mae_24h_pct",
         "candidate_avg_abs_mae_24h_pct",
     )
     if error is not None:
-        return {**metadata_evidence, **error}
+        return {**count_evidence, **error}
     evidence = {
-        **metadata_evidence,
-        "baseline_signal_count": baseline_signal_count,
-        "candidate_signal_count": candidate_signal_count,
-        "baseline_primary_label_complete_count": baseline_count,
-        "candidate_primary_label_complete_count": candidate_count,
+        **count_evidence,
         "baseline_precision_before_dd8": baseline_precision,
         "candidate_precision_before_dd8": candidate_precision,
         "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
@@ -1819,22 +1822,31 @@ def main() -> int:
     _validate_cli_mode(parser, args)
 
     if args.compare_baseline_config and args.compare_candidate_config:
-        baseline = load_comparison_config(args.compare_baseline_config)
-        candidate = load_comparison_config(args.compare_candidate_config)
-        ninety_day_baseline = (
-            load_comparison_config(args.compare_90d_baseline_config) if args.compare_90d_baseline_config else None
-        )
-        ninety_day_candidate = (
-            load_comparison_config(args.compare_90d_candidate_config) if args.compare_90d_candidate_config else None
-        )
-        result = compare_validation_runs(
-            baseline,
-            candidate,
-            require_90d=bool(args.require_90d),
-            change_classification=str(args.change_classification),
-            ninety_day_baseline=ninety_day_baseline,
-            ninety_day_candidate=ninety_day_candidate,
-        )
+        try:
+            baseline = load_comparison_config(args.compare_baseline_config)
+            candidate = load_comparison_config(args.compare_candidate_config)
+            ninety_day_baseline = (
+                load_comparison_config(args.compare_90d_baseline_config) if args.compare_90d_baseline_config else None
+            )
+            ninety_day_candidate = (
+                load_comparison_config(args.compare_90d_candidate_config) if args.compare_90d_candidate_config else None
+            )
+            result = compare_validation_runs(
+                baseline,
+                candidate,
+                require_90d=bool(args.require_90d),
+                change_classification=str(args.change_classification),
+                ninety_day_baseline=ninety_day_baseline,
+                ninety_day_candidate=ninety_day_candidate,
+            )
+        except ValueError as exc:
+            result = {
+                "status": "insufficient",
+                "reason": "invalid_comparison_config",
+                "error": str(exc),
+                "requires_90d": bool(args.require_90d),
+                "change_classification": str(args.change_classification),
+            }
         output_root = Path(args.output_root)
         output_root.mkdir(parents=True, exist_ok=True)
         comparison_path = output_root / f"{_utc_slug()}-comparison.json"

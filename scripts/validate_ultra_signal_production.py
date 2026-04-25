@@ -1121,12 +1121,13 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, signal_ts: datetime | p
     return pd.DataFrame(rows)
 
 
-def evaluate_signal_family(
-    engine: Engine,
+def evaluate_prepared_feature_frame(
+    features: pd.DataFrame,
+    *,
+    future_rows_by_asset_id: dict[int, pd.DataFrame],
     exchange: str,
     start: datetime,
     end: datetime,
-    *,
     signal_family: str = "ultra_high_conviction",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     signal_family = _normalize_signal_family(signal_family)
@@ -1135,44 +1136,15 @@ def evaluate_signal_family(
     if start_utc >= end_utc:
         raise ValueError("start must be earlier than end")
 
-    market_start = start_utc - timedelta(days=31)
-    market_end = end_utc + timedelta(hours=25)
-    hourly = fetch_hourly_bars(engine, exchange=exchange, start=market_start, end=market_end)
-    if hourly.empty:
-        summary = {
-            "signal_family": signal_family,
-            "exchange": exchange,
-            "from": start_utc.isoformat(),
-            "to": end_utc.isoformat(),
-            "market_from": market_start.isoformat(),
-            "market_to": market_end.isoformat(),
-            "hourly_rows": 0,
-            "feature_rows": 0,
-            "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
-            "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
-            "sensitivity_matrix": build_sensitivity_matrix([]),
-            "missing_optional_columns": detect_missing_optional_columns(pd.DataFrame()),
-            **summarize_evaluated_signals([], signal_family=signal_family),
-        }
-        summary["benchmark_status"] = "benchmark_missing"
-        summary["coverage_status"] = determine_coverage_status(
-            summary,
-            window_end=end_utc,
-            run_started_at=datetime.now(timezone.utc),
-            benchmark_status=summary["benchmark_status"],
-        )
-        return summary, []
-
-    features = _prepare_feature_frame(hourly)
-    missing_optional_columns = detect_missing_optional_columns(features)
     window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
-    gate_flow = summarize_ultra_gate_flow(window) if signal_family == "ultra_high_conviction" else {}
+    selector = _coerce_signal_selector(signal_family)
+    gate_flow = summarize_ultra_gate_flow(window) if selector.family.emit_gate_flow else {}
     signals = _select_signal_rows(window, signal_family)
 
     evaluated: list[dict[str, Any]] = []
     for row in signals.sort_values(["ts", "symbol"]).to_dict("records"):
         signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
-        future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), signal_ts, timedelta(hours=24))
+        future_1m = future_rows_by_asset_id.get(int(row["asset_id"]), _empty_forward_rows())
         labels = compute_validation_path_labels(
             signal_ts=signal_ts,
             entry_price=float(row["close"]),
@@ -1196,7 +1168,9 @@ def evaluate_signal_family(
                 "ignition_grade": row.get("ignition_grade"),
                 "reacceleration_grade": row.get("reacceleration_grade"),
                 "ultra_high_conviction": bool(row.get("ultra_high_conviction", False)),
-                "signal_priority": int(row["signal_priority"]) if _optional_float(row.get("signal_priority")) is not None else None,
+                "signal_priority": int(row["signal_priority"])
+                if _optional_float(row.get("signal_priority")) is not None
+                else None,
                 "return_1h_pct": float(row["return_1h_pct"]),
                 "return_4h_pct": float(row["return_4h_pct"]),
                 "return_24h_pct": float(row["return_24h_pct"]),
@@ -1258,14 +1232,10 @@ def evaluate_signal_family(
         "exchange": exchange,
         "from": start_utc.isoformat(),
         "to": end_utc.isoformat(),
-        "market_from": market_start.isoformat(),
-        "market_to": market_end.isoformat(),
-        "hourly_rows": int(len(hourly)),
         "feature_rows": int(len(features)),
         "gate_flow": gate_flow,
         "group_summary": summarize_signal_v2_groups(evaluated_frame),
-        "sensitivity_matrix": build_sensitivity_matrix(evaluated),
-        "missing_optional_columns": missing_optional_columns,
+        "missing_optional_columns": detect_missing_optional_columns(features),
         **summarize_evaluated_signals(evaluated, signal_family=signal_family),
     }
     benchmark_status = check_benchmark_inputs(features, exchange)
@@ -1276,6 +1246,80 @@ def evaluate_signal_family(
         benchmark_status=benchmark_status,
     )
     summary["benchmark_status"] = benchmark_status
+    return summary, evaluated
+
+
+def evaluate_signal_family(
+    engine: Engine,
+    exchange: str,
+    start: datetime,
+    end: datetime,
+    *,
+    signal_family: str = "ultra_high_conviction",
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    signal_family = _normalize_signal_family(signal_family)
+    start_utc = _coerce_utc_datetime(start)
+    end_utc = _coerce_utc_datetime(end)
+    if start_utc >= end_utc:
+        raise ValueError("start must be earlier than end")
+
+    market_start = start_utc - timedelta(days=31)
+    market_end = end_utc + timedelta(hours=25)
+    hourly = fetch_hourly_bars(engine, exchange=exchange, start=market_start, end=market_end)
+    if hourly.empty:
+        summary = {
+            "signal_family": signal_family,
+            "exchange": exchange,
+            "from": start_utc.isoformat(),
+            "to": end_utc.isoformat(),
+            "market_from": market_start.isoformat(),
+            "market_to": market_end.isoformat(),
+            "hourly_rows": 0,
+            "feature_rows": 0,
+            "gate_flow": summarize_ultra_gate_flow(pd.DataFrame()) if signal_family == "ultra_high_conviction" else {},
+            "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
+            "sensitivity_matrix": build_sensitivity_matrix([]),
+            "missing_optional_columns": detect_missing_optional_columns(pd.DataFrame()),
+            **summarize_evaluated_signals([], signal_family=signal_family),
+        }
+        summary["benchmark_status"] = "benchmark_missing"
+        summary["coverage_status"] = determine_coverage_status(
+            summary,
+            window_end=end_utc,
+            run_started_at=datetime.now(timezone.utc),
+            benchmark_status=summary["benchmark_status"],
+        )
+        return summary, []
+
+    features = _prepare_feature_frame(hourly)
+    window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
+    signals = _select_signal_rows(window, signal_family)
+    future_frames_by_asset_id: dict[int, list[pd.DataFrame]] = {}
+    for row in signals[["asset_id", "ts"]].drop_duplicates().to_dict("records"):
+        asset_id = int(row["asset_id"])
+        signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
+        future = fetch_forward_1m_rows(engine, asset_id, signal_ts, timedelta(hours=24))
+        future_frames_by_asset_id.setdefault(asset_id, []).append(future)
+    future_rows_by_asset_id: dict[int, pd.DataFrame] = {}
+    for asset_id, frames in future_frames_by_asset_id.items():
+        if not frames:
+            future_rows_by_asset_id[asset_id] = _empty_forward_rows()
+        elif len(frames) == 1:
+            future_rows_by_asset_id[asset_id] = frames[0]
+        else:
+            future_rows_by_asset_id[asset_id] = pd.concat(frames, ignore_index=True)
+
+    summary, evaluated = evaluate_prepared_feature_frame(
+        features,
+        future_rows_by_asset_id=future_rows_by_asset_id,
+        exchange=exchange,
+        start=start_utc,
+        end=end_utc,
+        signal_family=signal_family,
+    )
+    summary["market_from"] = market_start.isoformat()
+    summary["market_to"] = market_end.isoformat()
+    summary["hourly_rows"] = int(len(hourly))
     return summary, evaluated
 
 

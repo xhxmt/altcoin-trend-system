@@ -2209,3 +2209,159 @@ def test_rule_config_hash_changes_when_rule_config_changes():
     assert first.startswith("sha256:")
     assert second.startswith("sha256:")
     assert first != second
+
+
+def test_validate_prepared_features_end_to_end_for_all_families():
+    features = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BTCUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 0.0,
+                "return_4h_pct": 0.0,
+                "return_24h_pct": 0.0,
+                "return_7d_pct": 0.0,
+                "return_30d_pct": 0.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 100.0,
+                "chase_risk_score": 0.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 2,
+                "exchange": "binance",
+                "symbol": "ETHUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 0.0,
+                "return_4h_pct": 0.0,
+                "return_24h_pct": 0.0,
+                "return_7d_pct": 0.0,
+                "return_30d_pct": 0.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 100.0,
+                "chase_risk_score": 0.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 3,
+                "exchange": "binance",
+                "symbol": "CONTUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 8.0,
+                "return_4h_pct": 20.0,
+                "return_24h_pct": 35.0,
+                "return_7d_pct": 60.0,
+                "return_30d_pct": 70.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "continuation_grade": "A",
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 4,
+                "exchange": "binance",
+                "symbol": "IGNUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 5.0,
+                "return_4h_pct": 12.0,
+                "return_24h_pct": 24.0,
+                "return_7d_pct": 55.0,
+                "return_30d_pct": 40.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": "A",
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 5,
+                "exchange": "binance",
+                "symbol": "REACCUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 4.0,
+                "return_4h_pct": 12.0,
+                "return_24h_pct": 24.0,
+                "return_7d_pct": 55.0,
+                "return_30d_pct": 40.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": "B",
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 6,
+                "exchange": "binance",
+                "symbol": "ULTRAUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 15.0,
+                "return_4h_pct": 50.0,
+                "return_24h_pct": 95.0,
+                "return_7d_pct": 120.0,
+                "return_30d_pct": 100.0,
+                "volume_ratio_24h": 1.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 30.0,
+                "risk_flags": ("ULTRA_HIGH_CONVICTION",),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": True,
+            },
+        ]
+    )
+    future_rows = pd.DataFrame(
+        [
+            {
+                "ts": pd.Timestamp("2026-04-22T11:00:00Z") + pd.Timedelta(minutes=minute),
+                "open": 100.0,
+                "high": 112.0,
+                "low": 99.0,
+            }
+            for minute in range(60)
+        ]
+    )
+    future_rows_by_asset_id = {int(asset_id): future_rows for asset_id in features["asset_id"]}
+
+    outputs = {
+        family: _MODULE.evaluate_prepared_feature_frame(
+            features,
+            future_rows_by_asset_id=future_rows_by_asset_id,
+            exchange="binance",
+            start=pd.Timestamp("2026-04-22T10:00:00Z").to_pydatetime(),
+            end=pd.Timestamp("2026-04-22T11:00:00Z").to_pydatetime(),
+            signal_family=family,
+        )[0]
+        for family in ("continuation", "ignition", "reacceleration", "ultra_high_conviction")
+    }
+
+    assert outputs["continuation"]["signal_count"] == 1
+    assert outputs["ignition"]["signal_count"] == 1
+    assert outputs["reacceleration"]["signal_count"] == 1
+    assert outputs["ultra_high_conviction"]["signal_count"] == 1

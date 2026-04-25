@@ -54,9 +54,12 @@ COMPARISON_MATCH_FIELDS = (
     "symbol_blocklist",
     "feature_preparation_version",
     "selector",
+    "market_1m_timestamp_semantics",
     "timestamp_semantics",
     "entry_policy",
+    "forward_scan_start_policy",
     "primary_label",
+    "horizon_hours",
 )
 SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
 SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
@@ -1580,6 +1583,12 @@ def _safe_finite_float(summary: dict[str, Any], key: str, field_name: str) -> tu
     return value, None
 
 
+def _required_finite_float(summary: dict[str, Any], key: str, field_name: str) -> tuple[float | None, dict[str, Any] | None]:
+    if key not in summary:
+        return None, {"status": "insufficient", "reason": "missing_comparison_metric", "invalid_field": field_name}
+    return _safe_finite_float(summary, key, field_name)
+
+
 def compare_validation_runs(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -1635,45 +1644,90 @@ def compare_validation_runs(
         "baseline_primary_label_complete_count": baseline_count,
         "candidate_primary_label_complete_count": candidate_count,
     }
-    baseline_precision, error = _safe_finite_float(
+    for field in COMPARISON_MATCH_FIELDS:
+        if baseline_metadata.get(field) != candidate_metadata.get(field):
+            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
+            return {**count_evidence, "status": "insufficient", "reason": reason, "mismatched_field": field}
+    baseline_precision, error = _required_finite_float(
         baseline_summary,
         "precision_before_dd8",
         "baseline_precision_before_dd8",
     )
     if error is not None:
         return {**count_evidence, **error}
-    candidate_precision, error = _safe_finite_float(
+    candidate_precision, error = _required_finite_float(
         candidate_summary,
         "precision_before_dd8",
         "candidate_precision_before_dd8",
     )
     if error is not None:
         return {**count_evidence, **error}
-    baseline_abs_mae, error = _safe_finite_float(
-        baseline_summary,
-        "avg_abs_mae_24h_pct",
-        "baseline_avg_abs_mae_24h_pct",
-    )
-    if error is not None:
-        return {**count_evidence, **error}
-    candidate_abs_mae, error = _safe_finite_float(
-        candidate_summary,
-        "avg_abs_mae_24h_pct",
-        "candidate_avg_abs_mae_24h_pct",
-    )
-    if error is not None:
-        return {**count_evidence, **error}
+    baseline_has_abs_mae = "avg_abs_mae_24h_pct" in baseline_summary
+    candidate_has_abs_mae = "avg_abs_mae_24h_pct" in candidate_summary
+    baseline_abs_mae = None
+    candidate_abs_mae = None
+    baseline_signed_mae = None
+    candidate_signed_mae = None
+    mae_policy = "missing"
+    if baseline_has_abs_mae != candidate_has_abs_mae:
+        if baseline_has_abs_mae:
+            _, error = _safe_finite_float(
+                baseline_summary,
+                "avg_abs_mae_24h_pct",
+                "baseline_avg_abs_mae_24h_pct",
+            )
+            if error is not None:
+                return {**count_evidence, **error}
+        if candidate_has_abs_mae:
+            _, error = _safe_finite_float(
+                candidate_summary,
+                "avg_abs_mae_24h_pct",
+                "candidate_avg_abs_mae_24h_pct",
+            )
+            if error is not None:
+                return {**count_evidence, **error}
+    if baseline_has_abs_mae and candidate_has_abs_mae:
+        baseline_abs_mae, error = _safe_finite_float(
+            baseline_summary,
+            "avg_abs_mae_24h_pct",
+            "baseline_avg_abs_mae_24h_pct",
+        )
+        if error is not None:
+            return {**count_evidence, **error}
+        candidate_abs_mae, error = _safe_finite_float(
+            candidate_summary,
+            "avg_abs_mae_24h_pct",
+            "candidate_avg_abs_mae_24h_pct",
+        )
+        if error is not None:
+            return {**count_evidence, **error}
+        mae_policy = "avg_abs_mae_24h_pct"
+    else:
+        baseline_signed_mae, error = _required_finite_float(
+            baseline_summary,
+            "avg_mae_24h_pct",
+            "baseline_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return {**count_evidence, **error}
+        candidate_signed_mae, error = _required_finite_float(
+            candidate_summary,
+            "avg_mae_24h_pct",
+            "candidate_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return {**count_evidence, **error}
+        mae_policy = "avg_mae_24h_pct_abs_distance"
     evidence = {
         **count_evidence,
         "baseline_precision_before_dd8": baseline_precision,
         "candidate_precision_before_dd8": candidate_precision,
         "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
         "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
+        "baseline_avg_mae_24h_pct": baseline_signed_mae,
+        "candidate_avg_mae_24h_pct": candidate_signed_mae,
+        "mae_path_risk_policy": mae_policy,
     }
-    for field in COMPARISON_MATCH_FIELDS:
-        if baseline_metadata.get(field) != candidate_metadata.get(field):
-            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
-            return {**evidence, "status": "insufficient", "reason": reason, "mismatched_field": field}
     if baseline_metadata.get("coverage_status") != "trusted":
         return {
             **evidence,
@@ -1725,13 +1779,14 @@ def compare_validation_runs(
             "reason": "sample_limited",
         }
     count_floor = baseline_count * 0.8
-    evidence_backed = (
-        candidate_precision >= baseline_precision
-        and candidate_abs_mae < baseline_abs_mae
-        and candidate_count >= count_floor
-    )
+    if mae_policy == "avg_abs_mae_24h_pct":
+        path_risk_pass = candidate_abs_mae < baseline_abs_mae
+    else:
+        path_risk_pass = abs(candidate_signed_mae) < abs(baseline_signed_mae)
+    evidence_backed = candidate_precision >= baseline_precision and path_risk_pass and candidate_count >= count_floor
     return {
         **evidence,
+        "path_risk_pass": path_risk_pass,
         "status": "evidence_backed" if evidence_backed else "not_supported",
         "reason": "metrics_pass" if evidence_backed else "metrics_do_not_pass",
     }
@@ -1817,6 +1872,10 @@ def build_comparison_readme(result: dict[str, Any]) -> str:
         f"- candidate_precision_before_dd8: {result.get('candidate_precision_before_dd8')}",
         f"- baseline_avg_abs_mae_24h_pct: {result.get('baseline_avg_abs_mae_24h_pct')}",
         f"- candidate_avg_abs_mae_24h_pct: {result.get('candidate_avg_abs_mae_24h_pct')}",
+        f"- baseline_avg_mae_24h_pct: {result.get('baseline_avg_mae_24h_pct')}",
+        f"- candidate_avg_mae_24h_pct: {result.get('candidate_avg_mae_24h_pct')}",
+        f"- mae_path_risk_policy: {result.get('mae_path_risk_policy')}",
+        f"- path_risk_pass: {result.get('path_risk_pass')}",
     ]
     return "\n".join(lines) + "\n"
 

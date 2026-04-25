@@ -657,13 +657,27 @@ def _comparison_metadata(window_start="2026-03-25T00:00:00+00:00", window_end="2
         "symbol_blocklist": [],
         "feature_preparation_version": "abc123",
         "selector": "ignition",
+        "market_1m_timestamp_semantics": "minute_open_utc",
         "timestamp_semantics": "hour_bucket_start_utc",
         "entry_policy": "hour_close_proxy",
+        "forward_scan_start_policy": "signal_available_at_inclusive",
         "primary_label": "+10_before_-8",
+        "horizon_hours": 24,
         "coverage_status": "trusted",
         "rule_version": "rule:v1",
         "git_sha": "abc123",
     }
+
+
+def _comparison_summary(**overrides):
+    summary = {
+        "signal_count": 30,
+        "primary_label_complete_count": 30,
+        "precision_before_dd8": 0.6,
+        "avg_abs_mae_24h_pct": 8.0,
+    }
+    summary.update(overrides)
+    return summary
 
 
 def test_compare_validation_runs_rejects_window_mismatch():
@@ -682,6 +696,33 @@ def test_compare_validation_runs_rejects_window_mismatch():
 
     assert result["status"] == "insufficient"
     assert result["reason"] == "comparison_window_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("field", "candidate_value"),
+    [
+        ("market_1m_timestamp_semantics", "minute_close_utc"),
+        ("forward_scan_start_policy", "entry_ts_exclusive"),
+        ("horizon_hours", 48),
+    ],
+)
+def test_compare_validation_runs_rejects_timestamp_and_horizon_semantic_mismatch(field, candidate_value):
+    baseline = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
+    candidate = {
+        "metadata": {**_comparison_metadata(), field: candidate_value},
+        "summary": _comparison_summary(precision_before_dd8=0.8, avg_abs_mae_24h_pct=4.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_context_mismatch"
+    assert result["mismatched_field"] == field
 
 
 def test_compare_validation_runs_marks_sample_limited():
@@ -723,8 +764,75 @@ def test_compare_validation_runs_marks_sample_limited():
     assert result["candidate_precision_before_dd8"] == 0.75
     assert result["baseline_avg_abs_mae_24h_pct"] == 10.0
     assert result["candidate_avg_abs_mae_24h_pct"] == 7.0
+    assert result["baseline_avg_mae_24h_pct"] is None
+    assert result["candidate_avg_mae_24h_pct"] is None
+    assert result["mae_path_risk_policy"] == "avg_abs_mae_24h_pct"
     assert result["requires_90d"] is False
     assert result["change_classification"] == "non_material"
+
+
+def test_compare_validation_runs_uses_signed_mae_fallback_when_abs_mae_unavailable():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_mae_24h_pct=-10.0),
+    }
+    baseline["summary"].pop("avg_abs_mae_24h_pct")
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_mae_24h_pct=-6.0),
+    }
+    candidate["summary"].pop("avg_abs_mae_24h_pct")
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "evidence_backed"
+    assert result["reason"] == "metrics_pass"
+    assert result["mae_path_risk_policy"] == "avg_mae_24h_pct_abs_distance"
+    assert result["baseline_avg_abs_mae_24h_pct"] is None
+    assert result["candidate_avg_abs_mae_24h_pct"] is None
+    assert result["baseline_avg_mae_24h_pct"] == -10.0
+    assert result["candidate_avg_mae_24h_pct"] == -6.0
+    assert result["path_risk_pass"] is True
+
+
+def test_compare_validation_runs_requires_precision_metric():
+    baseline = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
+    baseline["summary"].pop("precision_before_dd8")
+    candidate = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "missing_comparison_metric"
+    assert result["invalid_field"] == "baseline_precision_before_dd8"
+
+
+def test_compare_validation_runs_requires_mae_metric_or_signed_mae_fallback():
+    baseline = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
+    baseline["summary"].pop("avg_abs_mae_24h_pct")
+    candidate = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
+    candidate["summary"].pop("avg_abs_mae_24h_pct")
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "missing_comparison_metric"
+    assert result["invalid_field"] == "baseline_avg_mae_24h_pct"
 
 
 def test_compare_validation_runs_does_not_use_signal_count_as_complete_count_fallback():
@@ -887,11 +995,11 @@ def test_numeric_safety_helpers_do_not_raise_for_oversized_integer():
 def test_compare_validation_runs_rejects_untrusted_baseline_coverage():
     baseline = {
         "metadata": {**_comparison_metadata(), "coverage_status": "insufficient_forward_coverage"},
-        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+        "summary": _comparison_summary(),
     }
     candidate = {
         "metadata": _comparison_metadata(),
-        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+        "summary": _comparison_summary(),
     }
 
     result = _MODULE.compare_validation_runs(

@@ -412,6 +412,22 @@ def test_sensitivity_matrix_cell_has_denominator_and_incomplete_count():
         "incomplete_count": 1,
         "precision": 0.5,
     }
+
+
+def test_compute_validation_path_labels_handles_empty_forward_rows():
+    labels = _MODULE.compute_validation_path_labels(
+        signal_ts=pd.Timestamp("2026-04-22T10:00:00Z"),
+        entry_price=100.0,
+        future_rows=pd.DataFrame(),
+    )
+
+    assert labels["label_complete_24h"] is False
+    assert labels["missing_minutes_24h"] == 1440
+    assert labels["mfe_24h_pct"] == 0.0
+    assert labels["mae_24h_pct"] == 0.0
+    assert labels["abs_mae_24h_pct"] == 0.0
+    assert labels["path_order"] == "unresolved"
+    assert labels["hit_10_before_dd8"] is False
 ```
 
 - [ ] **Step 2: Run path-label tests and verify failure**
@@ -445,11 +461,18 @@ def _path_key(target_pct: float, drawdown_pct: float) -> str:
     return f"target_{_format_pct_label(target_pct)}_dd_{_format_pct_label(drawdown_pct)}"
 
 
+def _empty_forward_rows() -> pd.DataFrame:
+    return pd.DataFrame(columns=["ts", "open", "high", "low"])
+
+
 def _prepare_forward_rows(future_rows: pd.DataFrame, entry_ts: pd.Timestamp, horizon_end: pd.Timestamp) -> pd.DataFrame:
     if future_rows.empty:
-        return future_rows.copy()
+        return _empty_forward_rows()
     frame = future_rows.copy()
-    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce", format="mixed")
+    for column in ("ts", "open", "high", "low"):
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
     for column in ("open", "high", "low"):
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -562,12 +585,19 @@ def compute_validation_path_labels(
             labels["path_results"][key] = result
             if target_pct == 0.10 and drawdown_pct == 0.08:
                 labels["hit_10pct_before_drawdown_8pct"] = bool(result["hit"])
+                labels["hit_10_before_dd8"] = bool(result["hit"])
                 labels["hit_10pct_first"] = True if result["path_order"] == "target_first" else False
                 labels["drawdown_8pct_first"] = result["path_order"] in {"drawdown_first", "ambiguous_same_bar"}
                 labels["time_to_hit_10pct_minutes"] = result["time_to_hit_minutes"]
                 labels["time_to_drawdown_8pct_minutes"] = result["time_to_drawdown_minutes"]
                 labels["path_order"] = result["path_order"]
                 labels["ambiguous_same_bar"] = result["path_order"] == "ambiguous_same_bar"
+    labels.setdefault("hit_10pct_before_drawdown_8pct", False)
+    labels.setdefault("hit_10_before_dd8", False)
+    labels.setdefault("hit_10pct_first", False)
+    labels.setdefault("drawdown_8pct_first", False)
+    labels.setdefault("time_to_hit_10pct_minutes", None)
+    labels.setdefault("time_to_drawdown_8pct_minutes", None)
     return labels
 ```
 
@@ -721,9 +751,11 @@ In each evaluated row dict, add these fields from `labels`:
 "label_complete_24h": labels["label_complete_24h"],
 "missing_minutes_24h": labels["missing_minutes_24h"],
 "abs_mae_24h_pct": labels["abs_mae_24h_pct"],
+"hit_10_before_dd8": labels["hit_10pct_before_drawdown_8pct"],
 "path_order": labels["path_order"],
 "ambiguous_same_bar": labels["ambiguous_same_bar"],
 "path_results": labels["path_results"],
+"path_results_json": json.dumps(labels["path_results"], sort_keys=True),
 "next_minute_open_entry_price": labels["next_minute_open_entry_price"],
 "next_minute_open_entry_return_delta_pct": labels["next_minute_open_entry_return_delta_pct"],
 ```
@@ -805,6 +837,34 @@ def test_summarize_evaluated_signals_excludes_incomplete_labels_from_denominator
     assert summary["avg_mae_24h_pct"] == -3.0
     assert summary["avg_abs_mae_24h_pct"] == 3.0
     assert summary["ambiguous_same_bar_count"] == 0
+
+
+def test_summarize_counts_unresolved_path_order():
+    summary = _MODULE.summarize_evaluated_signals(
+        [
+            {
+                "label_complete_1h": True,
+                "label_complete_4h": True,
+                "label_complete_24h": True,
+                "hit_10pct_1h": False,
+                "hit_10pct_4h": False,
+                "hit_10pct_24h": False,
+                "hit_10pct_before_drawdown_8pct": False,
+                "hit_10pct_first": False,
+                "drawdown_8pct_first": False,
+                "ambiguous_same_bar": False,
+                "path_order": "unresolved",
+                "mfe_24h_pct": 2.0,
+                "mae_24h_pct": -1.0,
+                "abs_mae_24h_pct": 1.0,
+                "time_to_hit_10pct_minutes": None,
+                "path_results": {"target_10_dd_8": {"hit": False}},
+            }
+        ],
+        signal_family="ignition",
+    )
+
+    assert summary["unresolved_24h_count"] == 1
 ```
 
 - [ ] **Step 2: Run summary test and verify failure**
@@ -880,7 +940,7 @@ def summarize_evaluated_signals(
     summary["unresolved_24h_count"] = sum(
         1
         for row in complete_24h
-        if row.get("hit_10pct_first") is None and row.get("drawdown_8pct_first") is None
+        if row.get("path_order") == "unresolved"
     )
     return summary
 ```
@@ -921,13 +981,219 @@ git commit -m "feat(validation): summarize complete labels only"
 
 ---
 
-### Task 6: Update Metadata, Signals CSV, And README Contract
+### Task 6: Determine Coverage Status And Stable Versions
+
+**Files:**
+- Modify: `scripts/validate_ultra_signal_production.py`
+- Modify: `tests/test_validate_signal_semantics.py`
+
+- [ ] **Step 1: Add failing coverage and version tests**
+
+Append to `tests/test_validate_signal_semantics.py`:
+
+```python
+def test_determine_coverage_status_marks_insufficient_forward_coverage():
+    summary = {
+        "signal_count": 100,
+        "primary_label_complete_count": 94,
+        "incomplete_label_count": 6,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 1, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "insufficient_forward_coverage"
+
+
+def test_determine_coverage_status_marks_stale_data_for_recent_window_end():
+    summary = {
+        "signal_count": 20,
+        "primary_label_complete_count": 20,
+        "incomplete_label_count": 0,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "stale_data"
+
+
+def test_determine_coverage_status_marks_insufficient_signal_count():
+    summary = {
+        "signal_count": 9,
+        "primary_label_complete_count": 9,
+        "incomplete_label_count": 0,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 1, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "insufficient_signal_count"
+
+
+def test_check_benchmark_inputs_marks_missing_btc_or_eth():
+    frame = pd.DataFrame(
+        [
+            {"exchange": "binance", "symbol": "BTCUSDT", "ts": pd.Timestamp("2026-04-24T00:00:00Z")},
+            {"exchange": "binance", "symbol": "SOLUSDT", "ts": pd.Timestamp("2026-04-24T00:00:00Z")},
+        ]
+    )
+
+    assert _MODULE.check_benchmark_inputs(frame, "binance") == "benchmark_missing"
+
+
+def test_rule_config_hash_changes_when_rule_config_changes():
+    first = _MODULE.rule_config_hash({"min_return_1h_pct": 12.0, "max_return_1h_pct": 35.0})
+    second = _MODULE.rule_config_hash({"min_return_1h_pct": 13.0, "max_return_1h_pct": 35.0})
+
+    assert first.startswith("sha256:")
+    assert second.startswith("sha256:")
+    assert first != second
+```
+
+- [ ] **Step 2: Run coverage and version tests and verify failure**
+
+Run: `.venv/bin/pytest tests/test_validate_signal_semantics.py::test_determine_coverage_status_marks_insufficient_forward_coverage tests/test_validate_signal_semantics.py::test_rule_config_hash_changes_when_rule_config_changes -q`
+
+Expected: fails because coverage and version helpers do not exist.
+
+- [ ] **Step 3: Implement coverage constants and helpers**
+
+Add near validation constants:
+
+```python
+FEATURE_PREPARATION_VERSION = "feature_v2"
+MINIMUM_BASELINE_COMPLETE_COUNT = 20
+MINIMUM_CANDIDATE_COMPLETE_COUNT = 10
+COVERAGE_TRUST_THRESHOLD = 0.95
+```
+
+Add imports:
+
+```python
+import hashlib
+```
+
+Add after summary helpers:
+
+```python
+def determine_coverage_status(
+    summary: dict[str, Any],
+    *,
+    window_end: datetime,
+    run_started_at: datetime,
+    benchmark_status: str = "trusted",
+) -> str:
+    if benchmark_status != "trusted":
+        return benchmark_status
+    run_started = _coerce_utc_datetime(run_started_at)
+    end = _coerce_utc_datetime(window_end)
+    if end > run_started - timedelta(hours=24):
+        return "stale_data"
+    signal_count = int(summary.get("signal_count", 0))
+    complete_count = int(summary.get("primary_label_complete_count", 0))
+    if signal_count > 0 and complete_count / signal_count < COVERAGE_TRUST_THRESHOLD:
+        return "insufficient_forward_coverage"
+    if complete_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
+        return "insufficient_signal_count"
+    return "trusted"
+
+
+def check_benchmark_inputs(feature_frame: pd.DataFrame, exchange: str) -> str:
+    if feature_frame.empty or "symbol" not in feature_frame.columns or "exchange" not in feature_frame.columns:
+        return "benchmark_missing"
+    exchange_rows = feature_frame[feature_frame["exchange"].astype(str).eq(exchange)]
+    symbols = set(exchange_rows["symbol"].astype(str).str.upper())
+    if {"BTCUSDT", "ETHUSDT"}.issubset(symbols):
+        return "trusted"
+    return "benchmark_missing"
+```
+
+- [ ] **Step 4: Implement rule config hash helpers**
+
+Add:
+
+```python
+def rule_config_hash(rule_config: dict[str, Any]) -> str:
+    payload = json.dumps(rule_config, sort_keys=True, separators=(",", ":"), default=str)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def current_rule_config(signal_family: str) -> dict[str, Any]:
+    family, _grade, _selector = parse_signal_selector(signal_family)
+    if family.name == "ultra_high_conviction":
+        return dict(ULTRA_HIGH_CONVICTION_RULE.__dict__)
+    return {
+        "family": family.name,
+        "selector_column": family.selector_column,
+        "grades": list(family.grades),
+    }
+
+
+def current_rule_version(signal_family: str) -> tuple[str, str, dict[str, Any]]:
+    config = current_rule_config(signal_family)
+    config_hash = rule_config_hash(config)
+    family, _grade, selector = parse_signal_selector(signal_family)
+    return f"{selector}:{config_hash}", config_hash, config
+```
+
+- [ ] **Step 5: Wire coverage status into evaluation summary**
+
+In `evaluate_signal_family`, after `summary` is built and before returning, add:
+
+```python
+benchmark_status = check_benchmark_inputs(features, exchange)
+summary["coverage_status"] = determine_coverage_status(
+    summary,
+    window_end=end_utc,
+    run_started_at=datetime.now(timezone.utc),
+    benchmark_status=benchmark_status,
+)
+summary["benchmark_status"] = benchmark_status
+```
+
+- [ ] **Step 6: Run coverage tests**
+
+Run: `.venv/bin/pytest tests/test_validate_signal_semantics.py tests/test_validate_ultra_signal_production.py -q`
+
+Expected: all tests pass.
+
+- [ ] **Step 7: Commit coverage status and versions**
+
+```bash
+git add scripts/validate_ultra_signal_production.py tests/test_validate_signal_semantics.py
+git commit -m "feat(validation): derive coverage status and rule versions"
+```
+
+---
+
+### Task 7: Update Metadata, Signals CSV, And README Contract
 
 **Files:**
 - Modify: `scripts/validate_ultra_signal_production.py`
 - Modify: `tests/test_validate_ultra_signal_production.py`
 
 - [ ] **Step 1: Update failing metadata contract test**
+
+In each `build_run_metadata(...)` test call in `tests/test_validate_ultra_signal_production.py`, add:
+
+```python
+coverage_status="trusted",
+primary_label_complete_count=4,
+incomplete_label_count=0,
+```
 
 In `tests/test_validate_ultra_signal_production.py::test_build_run_metadata_captures_validation_contract`, replace old assertions with:
 
@@ -940,6 +1206,10 @@ assert metadata["forward_scan_start_policy"] == "signal_available_at_inclusive"
 assert metadata["primary_label"] == "+10_before_-8"
 assert metadata["horizon_hours"] == 24
 assert metadata["coverage_status"] == "trusted"
+assert metadata["feature_preparation_version"] == "feature_v2"
+assert metadata["rule_version"].startswith("ultra_high_conviction:sha256:")
+assert metadata["rule_config_hash"].startswith("sha256:")
+assert isinstance(metadata["rule_config"], dict)
 assert metadata["validation_window"] == {
     "from": "2026-01-22T10:00:00+00:00",
     "to": "2026-04-22T10:00:00+00:00",
@@ -1009,7 +1279,7 @@ def build_run_metadata(
     git_sha: str = "unknown",
     symbol_allowlist: list[str] | None = None,
     symbol_blocklist: list[str] | None = None,
-    coverage_status: str = "trusted",
+    coverage_status: str = "insufficient_forward_coverage",
     primary_label_complete_count: int = 0,
     incomplete_label_count: int = 0,
     missing_optional_columns: list[str] | None = None,
@@ -1024,6 +1294,7 @@ family, _grade, selector = parse_signal_selector(signal_family)
 generated = _coerce_utc_datetime(generated_at or datetime.now(timezone.utc))
 allowlist = list(symbol_allowlist or [])
 blocklist = list(symbol_blocklist or [])
+rule_version, config_hash, rule_config = current_rule_version(signal_family)
 ```
 
 Return a dict that includes the old nested fields plus the v1.1 top-level contract:
@@ -1039,8 +1310,10 @@ Return a dict that includes the old nested fields plus the v1.1 top-level contra
 "symbol_blocklist": blocklist,
 "family": family.name,
 "selector": selector,
-"rule_version": f"{family.name}:{VALIDATOR_VERSION}",
-"feature_preparation_version": git_sha,
+"rule_version": rule_version,
+"rule_config_hash": config_hash,
+"rule_config": rule_config,
+"feature_preparation_version": FEATURE_PREPARATION_VERSION,
 "entry_policy": ENTRY_POLICY,
 "market_1m_timestamp_semantics": MARKET_1M_TIMESTAMP_SEMANTICS,
 "timestamp_semantics": TIMESTAMP_SEMANTICS,
@@ -1051,6 +1324,25 @@ Return a dict that includes the old nested fields plus the v1.1 top-level contra
 "incomplete_label_count": incomplete_label_count,
 "coverage_status": coverage_status,
 "missing_optional_columns": list(missing_optional_columns or []),
+```
+
+In `main`, when calling `build_run_metadata`, pass derived summary values:
+
+```python
+metadata = build_run_metadata(
+    exchange=args.exchange,
+    start=start,
+    end=end,
+    market_start=_parse_datetime(summary["market_from"]),
+    market_end=_parse_datetime(summary["market_to"]),
+    output_dir=output_dir,
+    output_root=output_root,
+    signal_family=signal_family,
+    coverage_status=str(summary.get("coverage_status", "insufficient_forward_coverage")),
+    primary_label_complete_count=int(summary.get("primary_label_complete_count", 0)),
+    incomplete_label_count=int(summary.get("incomplete_label_count", 0)),
+    missing_optional_columns=list(summary.get("missing_optional_columns", [])),
+)
 ```
 
 - [ ] **Step 4: Update README builder**
@@ -1082,6 +1374,18 @@ f"- incomplete_label_count: {summary.get('incomplete_label_count', 0)}",
 Add this constant near filenames:
 
 ```python
+OPTIONAL_REPORTING_COLUMNS = [
+    "return_1h_pct",
+    "return_4h_pct",
+    "return_24h_pct",
+    "return_7d_pct",
+    "return_30d_pct",
+    "quality_score",
+    "chase_risk_score",
+    "risk_flags",
+]
+
+
 SIGNALS_MINIMUM_COLUMNS = [
     "exchange",
     "symbol",
@@ -1102,11 +1406,30 @@ SIGNALS_MINIMUM_COLUMNS = [
 ]
 ```
 
+Add:
+
+```python
+def detect_missing_optional_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in OPTIONAL_REPORTING_COLUMNS if column not in frame.columns]
+```
+
+In `evaluate_prepared_feature_frame`, call `detect_missing_optional_columns(features)` and include the result in `summary["missing_optional_columns"]`.
+
 In `write_artifacts`, when rows exist, compute fieldnames:
 
 ```python
-extra_columns = sorted({key for row in rows for key in row.keys()} - set(SIGNALS_MINIMUM_COLUMNS))
+csv_rows = []
+for row in rows:
+    csv_row = dict(row)
+    if "path_results" in csv_row:
+        csv_row.pop("path_results")
+    if "path_results_json" not in csv_row and "path_results" in row:
+        csv_row["path_results_json"] = json.dumps(row["path_results"], sort_keys=True)
+    csv_rows.append(csv_row)
+extra_columns = sorted({key for row in csv_rows for key in row.keys()} - set(SIGNALS_MINIMUM_COLUMNS))
 writer = csv.DictWriter(handle, fieldnames=SIGNALS_MINIMUM_COLUMNS + extra_columns)
+writer.writeheader()
+writer.writerows(csv_rows)
 ```
 
 - [ ] **Step 6: Run artifact tests**
@@ -1124,7 +1447,7 @@ git commit -m "feat(validation): record v1 metadata contract"
 
 ---
 
-### Task 7: Add CLI Window Flags And Compatibility
+### Task 8: Add CLI Window Flags And Compatibility
 
 **Files:**
 - Modify: `scripts/validate_ultra_signal_production.py`
@@ -1157,6 +1480,18 @@ def test_resolve_validation_window_uses_window_days_and_end_at():
 
     assert start.isoformat() == "2026-03-25T00:00:00+00:00"
     assert end.isoformat() == "2026-04-24T00:00:00+00:00"
+
+
+def test_resolve_validation_window_defaults_to_30_days():
+    start, end = _MODULE.resolve_validation_window(
+        start_value=None,
+        end_value=None,
+        window_days=None,
+        now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert start.isoformat() == "2026-03-25T10:00:00+00:00"
+    assert end.isoformat() == "2026-04-24T10:00:00+00:00"
 ```
 
 - [ ] **Step 2: Run CLI window tests and verify failure**
@@ -1186,13 +1521,17 @@ def resolve_validation_window(
     elif window_days is not None:
         start, end = default_validation_window(window_days, now=now)
     else:
-        raise ValueError("provide --from and --to, or provide --window-days with optional --end-at")
+        start, end = default_validation_window(30, now=now)
     if start >= end:
         raise ValueError("start must be earlier than end")
     return start, end
 ```
 
-- [ ] **Step 4: Update argparse flags**
+- [ ] **Step 4: Inventory existing argparse flags**
+
+Before changing parser behavior, confirm the script currently supports `--from`, `--to`, `--exchange`, `--signal-family`, and `--output-root`. Keep those flags as compatibility paths and add new flags around them; do not remove legacy ultra usage.
+
+- [ ] **Step 5: Update argparse flags**
 
 In `main`, change parser setup to:
 
@@ -1200,13 +1539,16 @@ In `main`, change parser setup to:
 parser = argparse.ArgumentParser()
 parser.add_argument("--from", dest="start")
 parser.add_argument("--to", dest="end")
-parser.add_argument("--window-days", type=int)
+parser.add_argument("--window-days", type=int, default=None)
 parser.add_argument("--end-at", dest="end_at")
 parser.add_argument("--exchange", default="binance")
 parser.add_argument("--signal-family", default="ultra_high_conviction")
 parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
 parser.add_argument("--compare-baseline-config")
 parser.add_argument("--compare-candidate-config")
+parser.add_argument("--compare-90d-baseline-config")
+parser.add_argument("--compare-90d-candidate-config")
+parser.add_argument("--change-classification", choices=("material", "non_material"), default="non_material")
 parser.add_argument("--require-90d", action="store_true")
 ```
 
@@ -1220,13 +1562,13 @@ start, end = resolve_validation_window(
 )
 ```
 
-- [ ] **Step 5: Run CLI-related tests**
+- [ ] **Step 6: Run CLI-related tests**
 
 Run: `.venv/bin/pytest tests/test_validate_signal_semantics.py tests/test_validate_ultra_signal_production.py -q`
 
 Expected: all current validator tests pass.
 
-- [ ] **Step 6: Commit CLI flags**
+- [ ] **Step 7: Commit CLI flags**
 
 ```bash
 git add scripts/validate_ultra_signal_production.py tests/test_validate_signal_semantics.py
@@ -1235,7 +1577,7 @@ git commit -m "feat(validation): add fixed window flags"
 
 ---
 
-### Task 8: Add Comparison Policy Helpers
+### Task 9: Add Comparison Policy Helpers
 
 **Files:**
 - Modify: `scripts/validate_ultra_signal_production.py`
@@ -1271,7 +1613,12 @@ def test_compare_validation_runs_rejects_window_mismatch():
         "summary": {"signal_count": 20},
     }
 
-    result = _MODULE.compare_validation_runs(baseline, candidate, require_90d=False)
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
 
     assert result["status"] == "insufficient"
     assert result["reason"] == "comparison_window_mismatch"
@@ -1280,17 +1627,95 @@ def test_compare_validation_runs_rejects_window_mismatch():
 def test_compare_validation_runs_marks_sample_limited():
     baseline = {
         "metadata": _comparison_metadata(),
-        "summary": {"signal_count": 4, "precision_before_dd8": 0.5, "avg_abs_mae_24h_pct": 10.0},
+        "summary": {"signal_count": 50, "primary_label_complete_count": 4, "precision_before_dd8": 0.5, "avg_abs_mae_24h_pct": 10.0},
     }
     candidate = {
         "metadata": _comparison_metadata(),
-        "summary": {"signal_count": 4, "precision_before_dd8": 0.75, "avg_abs_mae_24h_pct": 7.0},
+        "summary": {"signal_count": 50, "primary_label_complete_count": 4, "precision_before_dd8": 0.75, "avg_abs_mae_24h_pct": 7.0},
     }
 
-    result = _MODULE.compare_validation_runs(baseline, candidate, require_90d=False)
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
 
     assert result["status"] == "experimental_only"
     assert result["reason"] == "sample_limited"
+
+
+def test_compare_validation_runs_rejects_untrusted_baseline_coverage():
+    baseline = {
+        "metadata": {**_comparison_metadata(), "coverage_status": "insufficient_forward_coverage"},
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "baseline_insufficient_forward_coverage"
+
+
+def test_compare_validation_runs_requires_90d_artifacts_when_requested():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30, "precision_before_dd8": 0.5, "avg_abs_mae_24h_pct": 10.0},
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30, "precision_before_dd8": 0.6, "avg_abs_mae_24h_pct": 8.0},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "missing_required_90d_review"
+
+
+def test_compare_validation_runs_requires_trusted_90d_review_for_material_change():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30, "precision_before_dd8": 0.5, "avg_abs_mae_24h_pct": 10.0},
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30, "precision_before_dd8": 0.6, "avg_abs_mae_24h_pct": 8.0},
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": {"signal_count": 60, "primary_label_complete_count": 60, "precision_before_dd8": 0.5, "avg_abs_mae_24h_pct": 10.0},
+    }
+    ninety_day_candidate = {
+        "metadata": {**_comparison_metadata(window_start="2026-01-24T00:00:00+00:00"), "coverage_status": "material_gaps"},
+        "summary": {"signal_count": 60, "primary_label_complete_count": 60, "precision_before_dd8": 0.6, "avg_abs_mae_24h_pct": 8.0},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "candidate_90d_material_gaps"
 ```
 
 - [ ] **Step 2: Run comparison tests and verify failure**
@@ -1323,24 +1748,54 @@ def compare_validation_runs(
     candidate: dict[str, Any],
     *,
     require_90d: bool,
+    change_classification: str,
+    ninety_day_baseline: dict[str, Any] | None = None,
+    ninety_day_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     baseline_metadata = baseline["metadata"]
     candidate_metadata = candidate["metadata"]
     for field in COMPARISON_MATCH_FIELDS:
         if baseline_metadata.get(field) != candidate_metadata.get(field):
-            return {"status": "insufficient", "reason": "comparison_window_mismatch", "mismatched_field": field}
+            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
+            return {"status": "insufficient", "reason": reason, "mismatched_field": field}
+    if baseline_metadata.get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"baseline_{baseline_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
     if candidate_metadata.get("coverage_status") != "trusted":
-        return {"status": "insufficient", "reason": candidate_metadata.get("coverage_status", "coverage_not_trusted")}
+        return {
+            "status": "insufficient",
+            "reason": f"candidate_{candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if change_classification not in {"material", "non_material"}:
+        return {"status": "insufficient", "reason": "missing_change_classification"}
+    if (require_90d or change_classification == "material") and (ninety_day_baseline is None or ninety_day_candidate is None):
+        return {"status": "insufficient", "reason": "missing_required_90d_review"}
+    if ninety_day_baseline is not None and ninety_day_baseline["metadata"].get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"baseline_90d_{ninety_day_baseline['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if ninety_day_candidate is not None and ninety_day_candidate["metadata"].get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"candidate_90d_{ninety_day_candidate['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
     baseline_summary = baseline["summary"]
     candidate_summary = candidate["summary"]
-    baseline_count = int(baseline_summary.get("signal_count", 0))
-    candidate_count = int(candidate_summary.get("signal_count", 0))
+    baseline_signal_count = int(baseline_summary.get("signal_count", 0))
+    candidate_signal_count = int(candidate_summary.get("signal_count", 0))
+    baseline_count = int(baseline_summary.get("primary_label_complete_count", baseline_signal_count))
+    candidate_count = int(candidate_summary.get("primary_label_complete_count", candidate_signal_count))
     if baseline_count < 20 or candidate_count < 10:
         return {
             "status": "experimental_only",
             "reason": "sample_limited",
-            "baseline_count": baseline_count,
-            "candidate_count": candidate_count,
+            "baseline_signal_count": baseline_signal_count,
+            "candidate_signal_count": candidate_signal_count,
+            "baseline_primary_label_complete_count": baseline_count,
+            "candidate_primary_label_complete_count": candidate_count,
         }
     baseline_precision = float(baseline_summary.get("precision_before_dd8", 0.0))
     candidate_precision = float(candidate_summary.get("precision_before_dd8", 0.0))
@@ -1355,13 +1810,22 @@ def compare_validation_runs(
     return {
         "status": "evidence_backed" if evidence_backed else "not_supported",
         "reason": "metrics_pass" if evidence_backed else "metrics_do_not_pass",
-        "baseline_count": baseline_count,
-        "candidate_count": candidate_count,
+        "baseline_signal_count": baseline_signal_count,
+        "candidate_signal_count": candidate_signal_count,
+        "baseline_primary_label_complete_count": baseline_count,
+        "candidate_primary_label_complete_count": candidate_count,
         "baseline_precision_before_dd8": baseline_precision,
         "candidate_precision_before_dd8": candidate_precision,
         "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
         "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
         "requires_90d": require_90d,
+        "change_classification": change_classification,
+        "comparison_window_start": baseline_metadata.get("window_start"),
+        "comparison_window_end": baseline_metadata.get("window_end"),
+        "baseline_rule_version": baseline_metadata.get("rule_version"),
+        "candidate_rule_version": candidate_metadata.get("rule_version"),
+        "baseline_git_sha": baseline_metadata.get("git_sha"),
+        "candidate_git_sha": candidate_metadata.get("git_sha"),
     }
 ```
 
@@ -1377,6 +1841,26 @@ def load_comparison_config(path: str) -> dict[str, Any]:
         "summary": json.loads(summary_path.read_text(encoding="utf-8")),
         "metadata": json.loads(metadata_path.read_text(encoding="utf-8")),
     }
+
+
+def build_comparison_readme(result: dict[str, Any]) -> str:
+    lines = [
+        "# Signal Validation Comparison",
+        "",
+        f"- status: {result.get('status')}",
+        f"- reason: {result.get('reason')}",
+        f"- comparison_window_start: {result.get('comparison_window_start')}",
+        f"- comparison_window_end: {result.get('comparison_window_end')}",
+        f"- baseline_rule_version: {result.get('baseline_rule_version')}",
+        f"- candidate_rule_version: {result.get('candidate_rule_version')}",
+        f"- baseline_primary_label_complete_count: {result.get('baseline_primary_label_complete_count')}",
+        f"- candidate_primary_label_complete_count: {result.get('candidate_primary_label_complete_count')}",
+        f"- baseline_precision_before_dd8: {result.get('baseline_precision_before_dd8')}",
+        f"- candidate_precision_before_dd8: {result.get('candidate_precision_before_dd8')}",
+        f"- baseline_avg_abs_mae_24h_pct: {result.get('baseline_avg_abs_mae_24h_pct')}",
+        f"- candidate_avg_abs_mae_24h_pct: {result.get('candidate_avg_abs_mae_24h_pct')}",
+    ]
+    return "\n".join(lines) + "\n"
 ```
 
 - [ ] **Step 4: Wire comparison flags into main**
@@ -1389,8 +1873,25 @@ if args.compare_baseline_config or args.compare_candidate_config:
         raise ValueError("--compare-baseline-config and --compare-candidate-config must be provided together")
     baseline = load_comparison_config(args.compare_baseline_config)
     candidate = load_comparison_config(args.compare_candidate_config)
-    result = compare_validation_runs(baseline, candidate, require_90d=bool(args.require_90d))
+    ninety_day_baseline = load_comparison_config(args.compare_90d_baseline_config) if args.compare_90d_baseline_config else None
+    ninety_day_candidate = load_comparison_config(args.compare_90d_candidate_config) if args.compare_90d_candidate_config else None
+    result = compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=bool(args.require_90d),
+        change_classification=str(args.change_classification),
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+    output_root = Path(args.output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    comparison_path = output_root / f"{_utc_slug()}-comparison.json"
+    comparison_readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
+    comparison_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    comparison_readme_path.write_text(build_comparison_readme(result), encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
+    print(f"comparison_path={comparison_path}")
+    print(f"comparison_readme_path={comparison_readme_path}")
     return 0
 ```
 
@@ -1409,7 +1910,295 @@ git commit -m "feat(validation): add comparison policy checks"
 
 ---
 
-### Task 9: Add Optional Real DB Smoke Test
+### Task 10: Add Fixture End-To-End Validation Test
+
+**Files:**
+- Modify: `scripts/validate_ultra_signal_production.py`
+- Modify: `tests/test_validate_signal_semantics.py`
+
+- [ ] **Step 1: Add failing fixture integration test**
+
+Append to `tests/test_validate_signal_semantics.py`:
+
+```python
+def test_validate_prepared_features_end_to_end_for_all_families():
+    features = pd.DataFrame(
+        [
+            {
+                "asset_id": 1,
+                "exchange": "binance",
+                "symbol": "BTCUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 0.0,
+                "return_4h_pct": 0.0,
+                "return_24h_pct": 0.0,
+                "return_7d_pct": 0.0,
+                "return_30d_pct": 0.0,
+                "quality_score": 100.0,
+                "chase_risk_score": 0.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 2,
+                "exchange": "binance",
+                "symbol": "ETHUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 0.0,
+                "return_4h_pct": 0.0,
+                "return_24h_pct": 0.0,
+                "return_7d_pct": 0.0,
+                "return_30d_pct": 0.0,
+                "quality_score": 100.0,
+                "chase_risk_score": 0.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 3,
+                "exchange": "binance",
+                "symbol": "CONTUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 8.0,
+                "return_4h_pct": 20.0,
+                "return_24h_pct": 35.0,
+                "return_7d_pct": 60.0,
+                "return_30d_pct": 70.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "continuation_grade": "A",
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 4,
+                "exchange": "binance",
+                "symbol": "IGNUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 12.0,
+                "return_4h_pct": 42.0,
+                "return_24h_pct": 60.0,
+                "return_7d_pct": 20.0,
+                "return_30d_pct": 30.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 30.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": "A",
+                "reacceleration_grade": None,
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 5,
+                "exchange": "binance",
+                "symbol": "REACCUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 4.0,
+                "return_4h_pct": 12.0,
+                "return_24h_pct": 24.0,
+                "return_7d_pct": 55.0,
+                "return_30d_pct": 40.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": "B",
+                "ultra_high_conviction": False,
+            },
+            {
+                "asset_id": 6,
+                "exchange": "binance",
+                "symbol": "ULTRAUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 15.0,
+                "return_4h_pct": 50.0,
+                "return_24h_pct": 95.0,
+                "return_7d_pct": 120.0,
+                "return_30d_pct": 100.0,
+                "quality_score": 90.0,
+                "chase_risk_score": 30.0,
+                "risk_flags": ("ULTRA_HIGH_CONVICTION",),
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": None,
+                "ultra_high_conviction": True,
+            },
+        ]
+    )
+    future_rows = pd.DataFrame(
+        [
+            {"ts": pd.Timestamp("2026-04-22T11:00:00Z") + pd.Timedelta(minutes=i), "open": 100.0, "high": 112.0, "low": 99.0}
+            for i in range(60)
+        ]
+    )
+
+    outputs = {
+        family: _MODULE.evaluate_prepared_feature_frame(
+            features,
+            future_rows_by_asset_id={asset_id: future_rows for asset_id in features["asset_id"]},
+            exchange="binance",
+            start=pd.Timestamp("2026-04-22T10:00:00Z").to_pydatetime(),
+            end=pd.Timestamp("2026-04-22T11:00:00Z").to_pydatetime(),
+            signal_family=family,
+        )[0]
+        for family in ("continuation", "ignition", "reacceleration", "ultra_high_conviction")
+    }
+
+    assert outputs["continuation"]["signal_count"] == 1
+    assert outputs["ignition"]["signal_count"] == 1
+    assert outputs["reacceleration"]["signal_count"] == 1
+    assert outputs["ultra_high_conviction"]["signal_count"] == 1
+```
+
+- [ ] **Step 2: Run fixture integration test and verify failure**
+
+Run: `.venv/bin/pytest tests/test_validate_signal_semantics.py::test_validate_prepared_features_end_to_end_for_all_families -q`
+
+Expected: fails because `evaluate_prepared_feature_frame` is not defined.
+
+- [ ] **Step 3: Extract prepared-frame evaluator**
+
+Add this helper above `evaluate_signal_family`:
+
+```python
+def evaluate_prepared_feature_frame(
+    features: pd.DataFrame,
+    *,
+    future_rows_by_asset_id: dict[int, pd.DataFrame],
+    exchange: str,
+    start: datetime,
+    end: datetime,
+    signal_family: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    start_utc = _coerce_utc_datetime(start)
+    end_utc = _coerce_utc_datetime(end)
+    window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
+    gate_flow = summarize_ultra_gate_flow(window) if parse_signal_selector(signal_family)[0].emit_gate_flow else {}
+    signals = _select_signal_rows(window, signal_family)
+    evaluated: list[dict[str, Any]] = []
+    for row in signals.sort_values(["ts", "symbol"]).to_dict("records"):
+        signal_ts = _coerce_utc_datetime(pd.Timestamp(row["ts"]).to_pydatetime())
+        labels = compute_validation_path_labels(
+            signal_ts=pd.Timestamp(signal_ts),
+            entry_price=float(row["close"]),
+            future_rows=future_rows_by_asset_id.get(int(row["asset_id"]), _empty_forward_rows()),
+        )
+        evaluated.append(
+            {
+                "ts": labels["signal_ts"],
+                "signal_ts": labels["signal_ts"],
+                "signal_available_at": labels["signal_available_at"],
+                "entry_ts": labels["entry_ts"],
+                "entry_price": labels["entry_price"],
+                "entry_policy": labels["entry_policy"],
+                "asset_id": int(row["asset_id"]),
+                "exchange": row["exchange"],
+                "symbol": row["symbol"],
+                "signal_family": parse_signal_selector(signal_family)[0].name,
+                "signal_grade": row.get(parse_signal_selector(signal_family)[0].selector_column) or "",
+                "close": float(row["close"]),
+                "label_complete_1h": labels["label_complete_1h"],
+                "label_complete_4h": labels["label_complete_4h"],
+                "label_complete_24h": labels["label_complete_24h"],
+                "hit_10_before_dd8": labels["hit_10_before_dd8"],
+                "hit_10pct_before_drawdown_8pct": labels["hit_10pct_before_drawdown_8pct"],
+                "hit_10pct_1h": labels["hit_10pct_1h"],
+                "hit_10pct_4h": labels["hit_10pct_4h"],
+                "hit_10pct_24h": labels["hit_10pct_24h"],
+                "mfe_1h_pct": labels["mfe_1h_pct"],
+                "mfe_4h_pct": labels["mfe_4h_pct"],
+                "mfe_24h_pct": labels["mfe_24h_pct"],
+                "mae_1h_pct": labels["mae_1h_pct"],
+                "mae_4h_pct": labels["mae_4h_pct"],
+                "mae_24h_pct": labels["mae_24h_pct"],
+                "abs_mae_24h_pct": labels["abs_mae_24h_pct"],
+                "path_order": labels["path_order"],
+                "ambiguous_same_bar": labels["ambiguous_same_bar"],
+                "path_results": labels["path_results"],
+                "path_results_json": json.dumps(labels["path_results"], sort_keys=True),
+                "time_to_hit_10pct_minutes": labels["time_to_hit_10pct_minutes"],
+                "time_to_drawdown_8pct_minutes": labels["time_to_drawdown_8pct_minutes"],
+            }
+        )
+    summary = {
+        "signal_family": signal_family,
+        "exchange": exchange,
+        "from": start_utc.isoformat(),
+        "to": end_utc.isoformat(),
+        "feature_rows": int(len(features)),
+        "gate_flow": gate_flow,
+        "group_summary": summarize_signal_v2_groups(pd.DataFrame(evaluated)),
+        "missing_optional_columns": detect_missing_optional_columns(features),
+        **summarize_evaluated_signals(evaluated, signal_family=signal_family),
+    }
+    summary["benchmark_status"] = check_benchmark_inputs(features, exchange)
+    summary["coverage_status"] = determine_coverage_status(
+        summary,
+        window_end=end_utc,
+        run_started_at=datetime.now(timezone.utc),
+        benchmark_status=str(summary["benchmark_status"]),
+    )
+    return summary, evaluated
+```
+
+Then update `evaluate_signal_family` after `features` and `window` are built:
+
+```python
+signals = _select_signal_rows(window, signal_family)
+future_rows_by_asset_id: dict[int, pd.DataFrame] = {}
+for row in signals[["asset_id", "ts"]].drop_duplicates().to_dict("records"):
+    signal_ts = _coerce_utc_datetime(pd.Timestamp(row["ts"]).to_pydatetime())
+    future_rows_by_asset_id[int(row["asset_id"])] = fetch_forward_1m_rows(
+        engine,
+        int(row["asset_id"]),
+        signal_ts,
+        timedelta(hours=24),
+    )
+summary, evaluated = evaluate_prepared_feature_frame(
+    features,
+    future_rows_by_asset_id=future_rows_by_asset_id,
+    exchange=exchange,
+    start=start_utc,
+    end=end_utc,
+    signal_family=signal_family,
+)
+summary["market_from"] = market_start.isoformat()
+summary["market_to"] = market_end.isoformat()
+summary["hourly_rows"] = int(len(hourly))
+return summary, evaluated
+```
+
+- [ ] **Step 4: Run fixture integration test**
+
+Run: `.venv/bin/pytest tests/test_validate_signal_semantics.py::test_validate_prepared_features_end_to_end_for_all_families -q`
+
+Expected: fixture integration test passes.
+
+- [ ] **Step 5: Commit fixture integration path**
+
+```bash
+git add scripts/validate_ultra_signal_production.py tests/test_validate_signal_semantics.py
+git commit -m "test(validation): add prepared-frame integration path"
+```
+
+---
+
+### Task 11: Add Optional Real DB Smoke Test
 
 **Files:**
 - Create: `tests/test_validate_signal_db_smoke.py`
@@ -1425,6 +2214,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import pandas as pd
+from sqlalchemy import text
 
 from altcoin_trend.config import load_settings
 from altcoin_trend.db import build_engine
@@ -1441,8 +2232,14 @@ _SPEC.loader.exec_module(_MODULE)
 def test_real_db_validation_smoke_generates_summary():
     settings = load_settings()
     engine = build_engine(settings)
-    start = datetime(2026, 4, 15, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 4, 16, 0, 0, tzinfo=timezone.utc)
+    with engine.begin() as connection:
+        latest_ts = connection.execute(
+            text("SELECT max(ts) FROM alt_core.market_1m WHERE exchange = 'binance'")
+        ).scalar()
+    if latest_ts is None:
+        pytest.skip("no binance market_1m data available")
+    end = _MODULE.hour_bucket_start(latest_ts).to_pydatetime()
+    start = (pd.Timestamp(end) - pd.Timedelta(days=1)).to_pydatetime()
 
     summary, rows = _MODULE.evaluate_signal_family(
         engine,
@@ -1478,7 +2275,7 @@ git commit -m "test(validation): add optional db smoke test"
 
 ---
 
-### Task 10: Final Verification And Documentation Check
+### Task 12: Final Verification And Documentation Check
 
 **Files:**
 - Modify only if prior tasks missed a required README line: `scripts/validate_ultra_signal_production.py`
@@ -1520,6 +2317,9 @@ Expected output contains all canonical flags:
 --end-at
 --compare-baseline-config
 --compare-candidate-config
+--compare-90d-baseline-config
+--compare-90d-candidate-config
+--change-classification
 --require-90d
 ```
 
@@ -1548,11 +2348,14 @@ Spec coverage:
 - Timestamp semantics are covered by Tasks 2, 3, and 4.
 - Entry policy and next-minute-open diagnostics are covered by Task 3.
 - Same-bar target/drawdown ambiguity is covered by Task 3.
-- Coverage-aware denominators and MAE directionality are covered by Task 5.
-- Minimum artifact contract is covered by Task 6.
-- Canonical script flags are covered by Task 7.
-- Before/after comparison policy is covered by Task 8.
-- Optional DB smoke testing is covered by Task 9.
+- Empty forward rows and `hit_10_before_dd8` aliasing are covered by Tasks 3 and 4.
+- Coverage-aware denominators, unresolved path counting, and MAE directionality are covered by Task 5.
+- Real coverage status, benchmark status, rule config hash, and feature-preparation version are covered by Task 6.
+- Minimum artifact contract and stable CSV output are covered by Task 7.
+- Canonical script flags and legacy flag compatibility are covered by Task 8.
+- Before/after comparison policy, complete-label sample counts, material change classification, and required 90-day review are covered by Task 9.
+- Fixture end-to-end validation across all v2 families is covered by Task 10.
+- Optional DB smoke testing with latest-range discovery is covered by Task 11.
 
 Placeholder scan:
 - This plan contains no placeholder markers, no deferred implementation sections, and no unnamed edge-case steps.

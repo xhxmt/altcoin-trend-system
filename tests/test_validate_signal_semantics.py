@@ -800,6 +800,43 @@ def test_compare_validation_runs_uses_signed_mae_fallback_when_abs_mae_unavailab
     assert result["path_risk_pass"] is True
 
 
+def test_compare_validation_runs_accepts_signed_mae_improvement_when_abs_mae_worsens():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(
+            precision_before_dd8=0.5,
+            avg_abs_mae_24h_pct=6.0,
+            avg_mae_24h_pct=-10.0,
+        ),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(
+            precision_before_dd8=0.6,
+            avg_abs_mae_24h_pct=7.0,
+            avg_mae_24h_pct=-4.0,
+        ),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "evidence_backed"
+    assert result["reason"] == "metrics_pass"
+    assert result["baseline_avg_abs_mae_24h_pct"] == 6.0
+    assert result["candidate_avg_abs_mae_24h_pct"] == 7.0
+    assert result["baseline_avg_mae_24h_pct"] == -10.0
+    assert result["candidate_avg_mae_24h_pct"] == -4.0
+    assert result["abs_mae_path_risk_pass"] is False
+    assert result["signed_mae_path_risk_pass"] is True
+    assert result["mae_path_risk_passes"] == ["avg_mae_24h_pct_abs_distance"]
+    assert result["path_risk_pass"] is True
+
+
 def test_compare_validation_runs_requires_precision_metric():
     baseline = {"metadata": _comparison_metadata(), "summary": _comparison_summary()}
     baseline["summary"].pop("precision_before_dd8")
@@ -1186,6 +1223,48 @@ def test_compare_validation_runs_handles_malformed_required_90d_window_as_insuff
 
     assert result["status"] == "insufficient"
     assert result["reason"] == "baseline_90d_window_too_short"
+
+
+@pytest.mark.parametrize(
+    ("candidate_metadata_overrides", "mismatched_field"),
+    [
+        ({"window_end": "2026-04-25T00:00:00+00:00"}, "window_end"),
+        ({"timestamp_semantics": "hour_bucket_end_utc"}, "timestamp_semantics"),
+    ],
+)
+def test_compare_validation_runs_rejects_90d_context_mismatch(candidate_metadata_overrides, mismatched_field):
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": {
+            **_comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+            **candidate_metadata_overrides,
+        },
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_90d_context_mismatch"
+    assert result["mismatched_90d_field"] == mismatched_field
 
 
 @pytest.mark.parametrize(

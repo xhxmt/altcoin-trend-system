@@ -4,22 +4,28 @@
 
 **Goal:** Build a repeatable evidence runner that generates audit-safe validation packages from real tests, real DB smoke, selector artifacts, and traceable comparison configs.
 
-**Architecture:** Add a new orchestration script, `scripts/run_validation_evidence_package.py`, that calls existing pytest and validator commands instead of reimplementing validation semantics. Keep helper functions small and directly testable from `tests/test_validation_evidence_runner.py`, with a thin `main()` that wires together package creation, command execution, DB-safe windows, selector artifact collection, comparison, manifest generation, and README generation.
+**Architecture:** Add a new orchestration script, `scripts/run_validation_evidence_package.py`, that calls existing pytest and validator commands instead of reimplementing validation semantics. Keep helper functions small and directly testable from `tests/test_run_validation_evidence_package.py`, with a thin `main()` that wires together package creation, command execution, DB-safe windows, selector artifact collection, comparison, manifest generation, and README generation.
 
 **Tech Stack:** Python 3.12 standard library (`argparse`, `dataclasses`, `datetime`, `json`, `os`, `platform`, `shutil`, `subprocess`, `sys`, `tempfile`, `uuid`, `xml.etree.ElementTree`, `pathlib`), pandas/SQLAlchemy already present in the project only for DB timestamp lookup through existing `altcoin_trend.config.load_settings()` and `altcoin_trend.db.build_engine()`, pytest for tests.
 
 ---
 
+## Plan Version
+
+Evidence Package Implementation Plan v1.0. This is the task-by-task execution plan for `docs/superpowers/specs/2026-04-25-validation-evidence-package-design.md` v1.1. It replaces the earlier workflow-style description with TDD tasks, file ownership, validation commands, and commit boundaries.
+
 ## Scope Check
 
-The approved spec is one subsystem: a P0 evidence-package runner. It does not require changes to signal rules, selector semantics, threshold policy, validator path-label logic, alerting, migrations, data backfill, or strategy docs. This plan therefore creates one runner script and one test file, and only touches the validator if a deterministic `--output-dir` flag proves necessary during implementation. Prefer using a temporary empty `--output-root` and deterministic artifact discovery first.
+The approved spec is one subsystem: a P0 evidence-package runner. It does not require changes to signal rules, selector semantics, threshold policy, validator path-label logic, alerting, migrations, data backfill, or strategy docs. This plan therefore creates one runner script and one test file. Do not modify `scripts/validate_ultra_signal_production.py` unless implementation proves an existing CLI incompatibility blocks the runner; if that happens, keep the validator change limited to CLI plumbing and do not change validator semantics.
+
+The runner must call the validator as an external command and must not duplicate selector, forward-label, coverage, or comparison policy logic. Prefer using a temporary empty `--output-root` and deterministic artifact discovery first; do not add a validator `--output-dir` unless the temporary-root approach cannot be made deterministic.
 
 ## File Structure
 
 - Create: `scripts/run_validation_evidence_package.py`
   - Owns CLI parsing, package path creation, command execution, git/environment capture, DB-aware `end_at`, DB smoke classification, selector validation orchestration, artifact extraction, comparison orchestration, status calculation, manifest writing, and README writing.
   - Exposes pure helpers for tests. `main()` remains a thin orchestrator.
-- Create: `tests/test_validation_evidence_runner.py`
+- Create: `tests/test_run_validation_evidence_package.py`
   - Imports the script by file path using `importlib.util.spec_from_file_location`, matching the current validator test pattern.
   - Uses monkeypatch/fake subprocess/fake DB helpers. No normal test depends on a real DB.
 - Existing entrypoint called by runner: `scripts/validate_ultra_signal_production.py`
@@ -30,17 +36,31 @@ The approved spec is one subsystem: a P0 evidence-package runner. It does not re
   - Impacted: `tests/test_trade_backtest.py`, `tests/test_signal_v2.py`, `tests/test_validate_signal_semantics.py`, `tests/test_validate_ultra_signal_production.py`
   - DB smoke formal gate: `tests/test_validate_signal_db_smoke.py`
 
+## Task Overview
+
+- Task 1: Add evidence runner skeleton and collision-safe package directory.
+- Task 2: Add command runner, log capture, git state, dirty diff, and environment capture.
+- Task 3: Add exchange-scoped DB-aware `end_at` resolver and manual safety checks.
+- Task 4: Add mandatory DB smoke classification and deterministic artifact discovery.
+- Task 5: Extract selector summary fields and selector evidence statuses.
+- Task 6: Run selector validation artifacts through the existing validator.
+- Task 7: Add traceable comparison config discovery and comparison command construction.
+- Task 8: Add layered status calculation and `EVIDENCE_PACKAGE.md` rendering.
+- Task 9: Wire main orchestration and partial manifest writing.
+- Task 10: Complete comparison execution, including stdout fallback persistence.
+- Task 11: Optional real evidence smoke run and final manual inspection.
+
 ---
 
 ### Task 1: Runner Skeleton, CLI, Default Selectors, And Package Paths
 
 **Files:**
 - Create: `scripts/run_validation_evidence_package.py`
-- Create: `tests/test_validation_evidence_runner.py`
+- Create: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Write failing tests for defaults, CLI, run id, and overwrite safety**
 
-Add this test harness and tests to `tests/test_validation_evidence_runner.py`:
+Add this test harness and tests to `tests/test_run_validation_evidence_package.py`:
 
 ```python
 import importlib.util
@@ -131,7 +151,7 @@ def test_resolve_package_dir_allows_existing_with_overwrite(tmp_path):
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: collection fails with `FileNotFoundError` for `scripts/run_validation_evidence_package.py`.
@@ -239,7 +259,7 @@ if __name__ == "__main__":
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: `5 passed`.
@@ -249,7 +269,7 @@ Expected: `5 passed`.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): add evidence runner skeleton"
 ```
 
@@ -259,11 +279,11 @@ git commit -m "feat(validation): add evidence runner skeleton"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for subprocess logs, dirty paths, and environment capture**
 
-Append these tests to `tests/test_validation_evidence_runner.py`:
+Append these tests to `tests/test_run_validation_evidence_package.py`:
 
 ```python
 import subprocess
@@ -340,6 +360,11 @@ def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
     ]
 
 
+def test_dirty_worktree_policy_disables_threshold_claims_for_relevant_paths():
+    assert _MODULE.dirty_worktree_policy([]) == "clean"
+    assert _MODULE.dirty_worktree_policy(["scripts/run_validation_evidence_package.py"]) == "threshold_claims_disabled"
+
+
 def test_collect_environment_contains_required_keys(monkeypatch):
     monkeypatch.setattr(_MODULE.platform, "platform", lambda: "Linux-test")
 
@@ -355,7 +380,7 @@ def test_collect_environment_contains_required_keys(monkeypatch):
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: failures mention missing `run_command`, `relevant_dirty_paths`, and `collect_environment`.
@@ -434,6 +459,10 @@ def relevant_dirty_paths(paths: list[str]) -> list[str]:
     return [path for path in paths if path.startswith(RELEVANT_DIRTY_PREFIXES)]
 
 
+def dirty_worktree_policy(relevant_paths: list[str]) -> str:
+    return "threshold_claims_disabled" if relevant_paths else "clean"
+
+
 def collect_environment(*, cwd: Path) -> dict[str, str]:
     environment = {
         "python_version": sys.version.split()[0],
@@ -502,7 +531,7 @@ def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -512,7 +541,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): add evidence runner command logging"
 ```
 
@@ -522,11 +551,11 @@ git commit -m "feat(validation): add evidence runner command logging"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for scoped DB time and manual safety**
 
-Append these tests to `tests/test_validation_evidence_runner.py`:
+Append these tests to `tests/test_run_validation_evidence_package.py`:
 
 ```python
 from datetime import timedelta
@@ -591,7 +620,7 @@ def test_resolve_end_at_allows_unsafe_manual_time_for_diagnostics():
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: failures mention missing `parse_iso_datetime`, `floor_hour`, and `resolve_end_at`.
@@ -684,7 +713,7 @@ def query_latest_market_ts(*, exchange: str) -> datetime:
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -694,7 +723,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): add evidence runner safe window"
 ```
 
@@ -704,11 +733,11 @@ git commit -m "feat(validation): add evidence runner safe window"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for JUnit classification and artifact discovery**
 
-Append these tests to `tests/test_validation_evidence_runner.py`:
+Append these tests to `tests/test_run_validation_evidence_package.py`:
 
 ```python
 def test_classify_pytest_junit_marks_skipped_as_skipped(tmp_path):
@@ -767,7 +796,7 @@ def test_discover_single_artifact_directory_fails_for_multiple_children(tmp_path
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `classify_pytest_junit` and `discover_single_artifact_directory`.
@@ -837,7 +866,7 @@ def place_artifact_directory(*, source: Path, destination: Path) -> Path:
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -847,7 +876,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): classify evidence smoke artifacts"
 ```
 
@@ -857,11 +886,11 @@ git commit -m "feat(validation): classify evidence smoke artifacts"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for required field extraction and selector statuses**
 
-Append these tests to `tests/test_validation_evidence_runner.py`:
+Append these tests to `tests/test_run_validation_evidence_package.py`:
 
 ```python
 import json
@@ -960,7 +989,7 @@ def test_extract_selector_artifact_fails_for_missing_required_field(tmp_path):
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `extract_selector_artifact`.
@@ -1061,7 +1090,7 @@ def extract_selector_artifact(*, selector: str, artifact_dir: Path) -> dict[str,
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -1071,7 +1100,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): summarize selector evidence artifacts"
 ```
 
@@ -1081,7 +1110,7 @@ git commit -m "feat(validation): summarize selector evidence artifacts"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for validator command construction and artifact placement**
 
@@ -1167,7 +1196,7 @@ def test_run_selector_validation_moves_single_generated_artifact(tmp_path, monke
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `build_selector_validator_command` and `run_selector_validation`.
@@ -1248,7 +1277,7 @@ def run_selector_validation(
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -1258,7 +1287,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): run selector evidence artifacts"
 ```
 
@@ -1268,7 +1297,7 @@ git commit -m "feat(validation): run selector evidence artifacts"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for traceable config parsing and no-config status**
 
@@ -1331,7 +1360,7 @@ def test_comparison_summary_for_missing_config_is_not_run():
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `load_traceable_comparison_configs` and `comparison_not_run`.
@@ -1490,7 +1519,7 @@ def build_comparison_command(
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -1500,7 +1529,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): load traceable comparison configs"
 ```
 
@@ -1510,7 +1539,7 @@ git commit -m "feat(validation): load traceable comparison configs"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing tests for status calculation and README wording**
 
@@ -1583,7 +1612,7 @@ def test_build_evidence_readme_uses_fixed_no_comparison_wording(tmp_path):
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `calculate_package_status` and `build_evidence_readme`.
@@ -1727,7 +1756,7 @@ def build_evidence_readme(manifest: dict[str, Any]) -> str:
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -1737,7 +1766,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): build evidence package summary"
 ```
 
@@ -1747,7 +1776,7 @@ git commit -m "feat(validation): build evidence package summary"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing integration-style test using fakes**
 
@@ -1819,6 +1848,31 @@ def test_run_evidence_package_writes_manifest_and_readme(tmp_path, monkeypatch):
     manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["selector_artifacts"]["ignition"]["selector_evidence_status"] == "evidence_eligible"
     assert manifest["comparison"]["comparison_status"] == "comparison_not_run"
+    assert manifest["dirty_worktree_policy"] == "clean"
+    assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
+```
+
+Append this failure-path test in the same step:
+
+```python
+def test_run_evidence_package_writes_partial_manifest_on_db_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])
+    monkeypatch.setattr(_MODULE, "archive_dirty_diff", lambda cwd, package_dir, paths: None)
+    monkeypatch.setattr(_MODULE, "query_latest_market_ts", lambda exchange: (_ for _ in ()).throw(RuntimeError("db unavailable")))
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+
+    exit_code = _MODULE.run_evidence_package(
+        ["--output-root", str(tmp_path / "validation"), "--selectors", "ignition"],
+        cwd=Path.cwd(),
+    )
+
+    package_dir = tmp_path / "validation" / "2026-04-25" / "121500-52e5e9b"
+    manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert manifest["overall_status"] == "failed"
+    assert manifest["formal_evidence_gate_passed"] is False
+    assert "db unavailable" in manifest["error"]
     assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
 ```
 
@@ -1827,7 +1881,7 @@ def test_run_evidence_package_writes_manifest_and_readme(tmp_path, monkeypatch):
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `run_evidence_package`.
@@ -1895,6 +1949,7 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
     dirty = dirty_paths(cwd=cwd)
     relevant_dirty = relevant_dirty_paths(dirty)
     dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
+    dirty_policy = dirty_worktree_policy(relevant_dirty)
     manifest: dict[str, Any] = {
         "package_date": identity["package_date"],
         "run_id": identity["run_id"],
@@ -1907,6 +1962,7 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
         "dirty_paths": dirty,
         "relevant_dirty_paths": relevant_dirty,
         "dirty_diff_path": dirty_diff,
+        "dirty_worktree_policy": dirty_policy,
         "exchange_universe": [args.exchange],
         "window_days": int(args.window_days),
         "selectors": list(selectors),
@@ -2012,7 +2068,7 @@ Remove the earlier skeleton `main()` that only parsed arguments.
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all current runner tests pass.
@@ -2022,7 +2078,7 @@ Expected: all current runner tests pass.
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): orchestrate evidence package runs"
 ```
 
@@ -2032,7 +2088,7 @@ git commit -m "feat(validation): orchestrate evidence package runs"
 
 **Files:**
 - Modify: `scripts/run_validation_evidence_package.py`
-- Modify: `tests/test_validation_evidence_runner.py`
+- Modify: `tests/test_run_validation_evidence_package.py`
 
 - [ ] **Step 1: Add failing test for successful comparison execution from traceable config**
 
@@ -2068,6 +2124,39 @@ def test_run_comparison_config_writes_side_configs_and_result(tmp_path, monkeypa
     assert result["reason"] == "metrics_pass"
     assert result["change_id"] == "change-1"
     assert Path(result["comparison_path"]).is_file()
+
+
+def test_run_comparison_config_persists_stdout_json_when_validator_writes_no_files(tmp_path, monkeypatch):
+    for name in ("baseline-summary.json", "baseline-metadata.json", "candidate-summary.json", "candidate-metadata.json"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    config = {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {"summary_path": str(tmp_path / "baseline-summary.json"), "metadata_path": str(tmp_path / "baseline-metadata.json")},
+        "candidate": {"summary_path": str(tmp_path / "candidate-summary.json"), "metadata_path": str(tmp_path / "candidate-metadata.json")},
+        "ninety_day": None,
+    }
+
+    def fake_run_command(**kwargs):
+        stdout_log = tmp_path / "comparison.stdout.log"
+        stdout_log.write_text('{"status": "insufficient", "reason": "sample_limited"}\n', encoding="utf-8")
+        return {
+            "name": kwargs["name"],
+            "exit_code": 0,
+            "classification": "passed",
+            "stdout_log": str(stdout_log),
+            "stderr_log": str(tmp_path / "comparison.stderr.log"),
+        }
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "insufficient"
+    assert result["reason"] == "sample_limited"
+    assert json.loads(Path(result["comparison_path"]).read_text(encoding="utf-8"))["status"] == "insufficient"
+    assert Path(result["comparison_readme_path"]).read_text(encoding="utf-8").startswith("# Signal Validation Comparison")
 ```
 
 - [ ] **Step 2: Run tests and verify missing comparison executor**
@@ -2075,7 +2164,7 @@ def test_run_comparison_config_writes_side_configs_and_result(tmp_path, monkeypa
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: missing `run_comparison_config`.
@@ -2102,13 +2191,46 @@ def write_validator_comparison_side_config(path: Path, side: dict[str, str]) -> 
     return path
 
 
-def discover_comparison_result(output_root: Path) -> tuple[Path, Path | None]:
+def build_comparison_result_readme(result: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Signal Validation Comparison",
+            "",
+            f"- status: {result.get('status')}",
+            f"- reason: {result.get('reason')}",
+            "",
+        ]
+    )
+
+
+def _comparison_json_from_stdout(stdout_log: Path) -> dict[str, Any]:
+    for line in stdout_log.read_text(encoding="utf-8").splitlines():
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and "status" in parsed:
+            return parsed
+    raise RuntimeError(f"comparison stdout did not contain a JSON result: {stdout_log}")
+
+
+def discover_comparison_result(output_root: Path, *, stdout_log: Path | None, comparison_dir: Path) -> tuple[Path, Path | None]:
     comparison_paths = sorted(output_root.glob("*-comparison.json"))
-    if len(comparison_paths) != 1:
-        raise RuntimeError(f"expected exactly one comparison json under {output_root}, found {len(comparison_paths)}")
-    comparison_path = comparison_paths[0]
-    readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
-    return comparison_path, readme_path if readme_path.is_file() else None
+    if len(comparison_paths) > 1:
+        raise RuntimeError(f"expected at most one comparison json under {output_root}, found {len(comparison_paths)}")
+    if len(comparison_paths) == 1:
+        comparison_path = comparison_paths[0]
+        readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
+        return comparison_path, readme_path if readme_path.is_file() else None
+    if stdout_log is None:
+        raise RuntimeError(f"expected comparison json under {output_root} or stdout JSON fallback")
+    result = _comparison_json_from_stdout(stdout_log)
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = comparison_dir / "comparison.json"
+    readme_path = comparison_dir / "comparison_README.md"
+    comparison_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    readme_path.write_text(build_comparison_result_readme(result), encoding="utf-8")
+    return comparison_path, readme_path
 
 
 def run_comparison_config(*, config: dict[str, Any], package_dir: Path, cwd: Path) -> dict[str, Any]:
@@ -2154,7 +2276,11 @@ def run_comparison_config(*, config: dict[str, Any], package_dir: Path, cwd: Pat
             "command": record,
             "change_id": config.get("change_id"),
         }
-    comparison_path, readme_path = discover_comparison_result(output_root)
+    comparison_path, readme_path = discover_comparison_result(
+        output_root,
+        stdout_log=Path(str(record.get("stdout_log"))) if record.get("stdout_log") else None,
+        comparison_dir=comparison_dir,
+    )
     result = read_json_object(comparison_path)
     status = str(result.get("status", "insufficient"))
     threshold_decision_status = "supported" if status == "evidence_backed" else "not_supported"
@@ -2199,7 +2325,7 @@ else:
 Run:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: all runner tests pass.
@@ -2210,7 +2336,7 @@ Run:
 
 ```bash
 .venv/bin/pytest \
-  tests/test_validation_evidence_runner.py \
+  tests/test_run_validation_evidence_package.py \
   tests/test_validate_signal_semantics.py \
   tests/test_validate_ultra_signal_production.py \
   -q
@@ -2226,7 +2352,7 @@ Run:
 .venv/bin/pytest \
   tests/test_trade_backtest.py \
   tests/test_signal_v2.py \
-  tests/test_validation_evidence_runner.py \
+  tests/test_run_validation_evidence_package.py \
   tests/test_validate_signal_semantics.py \
   tests/test_validate_ultra_signal_production.py \
   -q
@@ -2249,7 +2375,7 @@ Expected: help output includes `--exchange`, `--end-at`, `--selectors`, `--compa
 Run:
 
 ```bash
-git add scripts/run_validation_evidence_package.py tests/test_validation_evidence_runner.py
+git add scripts/run_validation_evidence_package.py tests/test_run_validation_evidence_package.py
 git commit -m "feat(validation): execute traceable evidence comparisons"
 ```
 
@@ -2310,7 +2436,7 @@ Expected: runtime artifact files are untracked or ignored. Do not add them to gi
 - [ ] Run the runner test file:
 
 ```bash
-.venv/bin/pytest tests/test_validation_evidence_runner.py -q
+.venv/bin/pytest tests/test_run_validation_evidence_package.py -q
 ```
 
 Expected: pass.
@@ -2319,7 +2445,7 @@ Expected: pass.
 
 ```bash
 .venv/bin/pytest \
-  tests/test_validation_evidence_runner.py \
+  tests/test_run_validation_evidence_package.py \
   tests/test_validate_signal_semantics.py \
   tests/test_validate_ultra_signal_production.py \
   -q
@@ -2333,7 +2459,7 @@ Expected: pass.
 .venv/bin/pytest \
   tests/test_trade_backtest.py \
   tests/test_signal_v2.py \
-  tests/test_validation_evidence_runner.py \
+  tests/test_run_validation_evidence_package.py \
   tests/test_validate_signal_semantics.py \
   tests/test_validate_ultra_signal_production.py \
   -q
@@ -2367,9 +2493,9 @@ Expected: source and tests changed as intended; no `artifacts/autoresearch/valid
 - Deterministic artifact discovery: Task 4 and Task 6.
 - Canonical selector field extraction and sample status: Task 5.
 - Traceable comparison schema and no filename inference: Task 7.
-- Comparison execution and result capture: Task 10.
+- Comparison execution, file result capture, and stdout JSON fallback persistence: Task 10.
 - Layered package/selector/comparison/threshold status: Task 8.
-- Dirty worktree handling and diff archive: Task 2 and Task 9.
-- Manifest and README output: Task 8 and Task 9.
+- Dirty worktree handling, dirty-worktree policy, and diff archive: Task 2 and Task 9.
+- Manifest, partial manifest failure path, and README output: Task 8 and Task 9.
 - Skip-tests downgrade: Task 8 and Task 9.
 - Normal tests stay DB-independent: all test tasks use monkeypatch/fakes; real DB is only in Task 11.

@@ -88,7 +88,7 @@ SIGNAL_FAMILY_REGISTRY: dict[str, SignalFamilyDefinition] = {
             "signal_v2_ignition_candidate",
             "signal_v2_ignition_grade",
         ),
-        grades=("A", "B", "C"),
+        grades=("A", "B", "C", "EXTREME"),
     ),
     "reacceleration": SignalFamilyDefinition(
         name="reacceleration",
@@ -135,6 +135,9 @@ def parse_signal_selector(raw: str) -> SignalSelector:
 
     family_name = normalized
     grade: str | None = None
+    if normalized.endswith("_extreme"):
+        family_name = normalized[: -len("_extreme")]
+        grade = "EXTREME"
     if len(normalized) > 2 and normalized[-2] == "_" and normalized[-1] in {"a", "b", "c"}:
         family_name = normalized[:-2]
         grade = normalized[-1].upper()
@@ -230,8 +233,37 @@ def _truthy_signal_mask(series: pd.Series) -> pd.Series:
     return normalized.isin({"1", "true", "t", "yes", "y"})
 
 
+_NEGATIVE_GRADE_PLACEHOLDERS = {"", "-", "none", "null", "nan", "false", "0"}
+
+
+def _has_positive_grade(series: pd.Series) -> pd.Series:
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    return ~normalized.isin(_NEGATIVE_GRADE_PLACEHOLDERS)
+
+
+def _normalize_legacy_signal_columns(window: pd.DataFrame, selector: SignalSelector) -> pd.DataFrame:
+    if selector.family.grade_column is None:
+        return window
+
+    legacy_grade_column = f"{selector.family.name}_grade"
+    needs_grade = selector.family.grade_column not in window.columns
+    needs_candidate = selector.family.candidate_column not in window.columns
+    if (not needs_grade and not needs_candidate) or legacy_grade_column not in window.columns:
+        return window
+
+    normalized = window.copy()
+    if needs_grade:
+        normalized[selector.family.grade_column] = normalized[legacy_grade_column]
+    if needs_candidate:
+        # Legacy production frames only expose grades. Treat a non-placeholder grade
+        # as the conservative candidate marker, and keep missing legacy columns hard errors.
+        normalized[selector.family.candidate_column] = _has_positive_grade(normalized[selector.family.grade_column])
+    return normalized
+
+
 def _select_signal_rows(window: pd.DataFrame, signal_family: str | SignalSelector) -> pd.DataFrame:
     selector = _coerce_signal_selector(signal_family)
+    window = _normalize_legacy_signal_columns(window, selector)
     missing = [column for column in selector.family.required_columns if column not in window.columns]
     if missing:
         columns = ", ".join(missing)

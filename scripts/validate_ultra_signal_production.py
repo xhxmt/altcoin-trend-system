@@ -1521,6 +1521,46 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _comparison_artifact_error(artifact_name: str) -> dict[str, Any]:
+    return {
+        "status": "insufficient",
+        "reason": "invalid_comparison_artifact",
+        "invalid_artifact": artifact_name,
+    }
+
+
+def _comparison_artifact_parts(artifact: Any, artifact_name: str) -> tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return _comparison_artifact_error(artifact_name)
+    metadata = artifact.get("metadata")
+    summary = artifact.get("summary")
+    if not isinstance(metadata, dict) or not isinstance(summary, dict):
+        return _comparison_artifact_error(artifact_name)
+    return metadata, summary
+
+
+def _safe_finite_int(summary: dict[str, Any], key: str, field_name: str) -> tuple[int | None, dict[str, Any] | None]:
+    raw = summary.get(key, 0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    if not math.isfinite(value) or not value.is_integer():
+        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    return int(value), None
+
+
+def _safe_finite_float(summary: dict[str, Any], key: str, field_name: str) -> tuple[float | None, dict[str, Any] | None]:
+    raw = summary.get(key, 0.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    if not math.isfinite(value):
+        return None, {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
+    return value, None
+
+
 def compare_validation_runs(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -1530,25 +1570,75 @@ def compare_validation_runs(
     ninety_day_baseline: dict[str, Any] | None = None,
     ninety_day_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    baseline_metadata = baseline["metadata"]
-    candidate_metadata = candidate["metadata"]
-    baseline_summary = baseline["summary"]
-    candidate_summary = candidate["summary"]
-    baseline_signal_count = int(baseline_summary.get("signal_count", 0))
-    candidate_signal_count = int(candidate_summary.get("signal_count", 0))
-    baseline_count = int(baseline_summary.get("primary_label_complete_count", 0))
-    candidate_count = int(candidate_summary.get("primary_label_complete_count", 0))
-    baseline_precision = float(baseline_summary.get("precision_before_dd8", 0.0))
-    candidate_precision = float(candidate_summary.get("precision_before_dd8", 0.0))
-    baseline_abs_mae = float(baseline_summary.get("avg_abs_mae_24h_pct", 0.0))
-    candidate_abs_mae = float(candidate_summary.get("avg_abs_mae_24h_pct", 0.0))
-    evidence = {
+    baseline_parts = _comparison_artifact_parts(baseline, "baseline")
+    if isinstance(baseline_parts, dict):
+        return baseline_parts
+    candidate_parts = _comparison_artifact_parts(candidate, "candidate")
+    if isinstance(candidate_parts, dict):
+        return candidate_parts
+    baseline_metadata, baseline_summary = baseline_parts
+    candidate_metadata, candidate_summary = candidate_parts
+    metadata_evidence = {
         "comparison_window_start": baseline_metadata.get("window_start"),
         "comparison_window_end": baseline_metadata.get("window_end"),
         "baseline_rule_version": baseline_metadata.get("rule_version"),
         "candidate_rule_version": candidate_metadata.get("rule_version"),
         "baseline_git_sha": baseline_metadata.get("git_sha"),
         "candidate_git_sha": candidate_metadata.get("git_sha"),
+        "requires_90d": require_90d,
+        "change_classification": change_classification,
+    }
+
+    baseline_signal_count, error = _safe_finite_int(baseline_summary, "signal_count", "baseline_signal_count")
+    if error is not None:
+        return {**metadata_evidence, **error}
+    candidate_signal_count, error = _safe_finite_int(candidate_summary, "signal_count", "candidate_signal_count")
+    if error is not None:
+        return {**metadata_evidence, **error}
+    baseline_count, error = _safe_finite_int(
+        baseline_summary,
+        "primary_label_complete_count",
+        "baseline_primary_label_complete_count",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    candidate_count, error = _safe_finite_int(
+        candidate_summary,
+        "primary_label_complete_count",
+        "candidate_primary_label_complete_count",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    baseline_precision, error = _safe_finite_float(
+        baseline_summary,
+        "precision_before_dd8",
+        "baseline_precision_before_dd8",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    candidate_precision, error = _safe_finite_float(
+        candidate_summary,
+        "precision_before_dd8",
+        "candidate_precision_before_dd8",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    baseline_abs_mae, error = _safe_finite_float(
+        baseline_summary,
+        "avg_abs_mae_24h_pct",
+        "baseline_avg_abs_mae_24h_pct",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    candidate_abs_mae, error = _safe_finite_float(
+        candidate_summary,
+        "avg_abs_mae_24h_pct",
+        "candidate_avg_abs_mae_24h_pct",
+    )
+    if error is not None:
+        return {**metadata_evidence, **error}
+    evidence = {
+        **metadata_evidence,
         "baseline_signal_count": baseline_signal_count,
         "candidate_signal_count": candidate_signal_count,
         "baseline_primary_label_complete_count": baseline_count,
@@ -1557,8 +1647,6 @@ def compare_validation_runs(
         "candidate_precision_before_dd8": candidate_precision,
         "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
         "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
-        "requires_90d": require_90d,
-        "change_classification": change_classification,
     }
     for field in COMPARISON_MATCH_FIELDS:
         if baseline_metadata.get(field) != candidate_metadata.get(field):
@@ -1582,17 +1670,31 @@ def compare_validation_runs(
         ninety_day_baseline is None or ninety_day_candidate is None
     ):
         return {**evidence, "status": "insufficient", "reason": "missing_required_90d_review"}
-    if ninety_day_baseline is not None and ninety_day_baseline["metadata"].get("coverage_status") != "trusted":
+    if ninety_day_baseline is not None:
+        ninety_day_baseline_parts = _comparison_artifact_parts(ninety_day_baseline, "baseline_90d")
+        if isinstance(ninety_day_baseline_parts, dict):
+            return {**evidence, **ninety_day_baseline_parts}
+        ninety_day_baseline_metadata = ninety_day_baseline_parts[0]
+    else:
+        ninety_day_baseline_metadata = None
+    if ninety_day_candidate is not None:
+        ninety_day_candidate_parts = _comparison_artifact_parts(ninety_day_candidate, "candidate_90d")
+        if isinstance(ninety_day_candidate_parts, dict):
+            return {**evidence, **ninety_day_candidate_parts}
+        ninety_day_candidate_metadata = ninety_day_candidate_parts[0]
+    else:
+        ninety_day_candidate_metadata = None
+    if ninety_day_baseline_metadata is not None and ninety_day_baseline_metadata.get("coverage_status") != "trusted":
         return {
             **evidence,
             "status": "insufficient",
-            "reason": f"baseline_90d_{ninety_day_baseline['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+            "reason": f"baseline_90d_{ninety_day_baseline_metadata.get('coverage_status', 'coverage_not_trusted')}",
         }
-    if ninety_day_candidate is not None and ninety_day_candidate["metadata"].get("coverage_status") != "trusted":
+    if ninety_day_candidate_metadata is not None and ninety_day_candidate_metadata.get("coverage_status") != "trusted":
         return {
             **evidence,
             "status": "insufficient",
-            "reason": f"candidate_90d_{ninety_day_candidate['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+            "reason": f"candidate_90d_{ninety_day_candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
         }
     if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
         return {
@@ -1615,12 +1717,31 @@ def compare_validation_runs(
 
 def load_comparison_config(path: str) -> dict[str, Any]:
     config_path = Path(path)
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    summary_path = Path(config["summary_path"])
-    metadata_path = Path(config["metadata_path"])
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read comparison config {config_path}: {exc}") from exc
+    if not isinstance(config, dict) or "summary_path" not in config or "metadata_path" not in config:
+        raise ValueError(f"comparison config {config_path} requires summary_path and metadata_path")
+    summary_path = Path(str(config["summary_path"]))
+    metadata_path = Path(str(config["metadata_path"]))
+    if not summary_path.is_absolute():
+        summary_path = config_path.parent / summary_path
+    if not metadata_path.is_absolute():
+        metadata_path = config_path.parent / metadata_path
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read summary_path for comparison config {config_path}: {summary_path}: {exc}") from exc
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read metadata_path for comparison config {config_path}: {metadata_path}: {exc}") from exc
+    if not isinstance(summary, dict) or not isinstance(metadata, dict):
+        raise ValueError(f"comparison config {config_path} summary_path and metadata_path must contain JSON objects")
     return {
-        "summary": json.loads(summary_path.read_text(encoding="utf-8")),
-        "metadata": json.loads(metadata_path.read_text(encoding="utf-8")),
+        "summary": summary,
+        "metadata": metadata,
     }
 
 

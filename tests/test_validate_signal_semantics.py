@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -760,6 +761,66 @@ def test_compare_validation_runs_does_not_use_signal_count_as_complete_count_fal
     assert result["candidate_primary_label_complete_count"] == 0
 
 
+@pytest.mark.parametrize(
+    "baseline",
+    [
+        {"summary": {"signal_count": 20}},
+        {"metadata": _comparison_metadata()},
+        {"metadata": [], "summary": {"signal_count": 20}},
+        {"metadata": _comparison_metadata(), "summary": []},
+    ],
+)
+def test_compare_validation_runs_returns_invalid_artifact_for_bad_shape(baseline):
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_artifact"
+
+
+@pytest.mark.parametrize("bad_value", ["bad", float("nan")])
+def test_compare_validation_runs_returns_invalid_metric_for_bad_numeric_value(bad_value):
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": bad_value,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.6,
+            "avg_abs_mae_24h_pct": 8.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_precision_before_dd8"
+    json.dumps(result, allow_nan=False)
+
+
 def test_compare_validation_runs_rejects_untrusted_baseline_coverage():
     baseline = {
         "metadata": {**_comparison_metadata(), "coverage_status": "insufficient_forward_coverage"},
@@ -935,6 +996,42 @@ def test_validate_cli_mode_allows_default_normal_validation_args():
     )
 
     assert _MODULE._validate_cli_mode(parser, args) is None
+
+
+def test_load_comparison_config_resolves_paths_relative_to_config(tmp_path, monkeypatch):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "summary.json").write_text(
+        json.dumps({"signal_count": 30, "primary_label_complete_count": 30}),
+        encoding="utf-8",
+    )
+    (config_dir / "metadata.json").write_text(json.dumps(_comparison_metadata()), encoding="utf-8")
+    config_path = config_dir / "comparison.json"
+    config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = _MODULE.load_comparison_config(str(config_path))
+
+    assert result["summary"]["signal_count"] == 30
+    assert result["metadata"]["selector"] == "ignition"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"metadata_path": "metadata.json"},
+        {"summary_path": "summary.json"},
+    ],
+)
+def test_load_comparison_config_rejects_missing_required_paths(tmp_path, config):
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison config .* requires summary_path and metadata_path"):
+        _MODULE.load_comparison_config(str(config_path))
 
 
 def test_rule_config_hash_changes_when_rule_config_changes():

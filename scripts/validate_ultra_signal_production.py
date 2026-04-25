@@ -1725,6 +1725,7 @@ def load_comparison_config(path: str) -> dict[str, Any]:
             config_path.read_text(encoding="utf-8"),
             parse_constant=_reject_non_standard_json_constant,
         )
+        _validate_finite_json_numbers(config, f"comparison config {config_path}")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read comparison config {config_path}: {exc}") from exc
     if not isinstance(config, dict) or "summary_path" not in config or "metadata_path" not in config:
@@ -1740,6 +1741,7 @@ def load_comparison_config(path: str) -> dict[str, Any]:
             summary_path.read_text(encoding="utf-8"),
             parse_constant=_reject_non_standard_json_constant,
         )
+        _validate_finite_json_numbers(summary, f"summary_path for comparison config {config_path}: {summary_path}")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read summary_path for comparison config {config_path}: {summary_path}: {exc}") from exc
     try:
@@ -1747,6 +1749,7 @@ def load_comparison_config(path: str) -> dict[str, Any]:
             metadata_path.read_text(encoding="utf-8"),
             parse_constant=_reject_non_standard_json_constant,
         )
+        _validate_finite_json_numbers(metadata, f"metadata_path for comparison config {config_path}: {metadata_path}")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read metadata_path for comparison config {config_path}: {metadata_path}: {exc}") from exc
     if not isinstance(summary, dict) or not isinstance(metadata, dict):
@@ -1759,6 +1762,22 @@ def load_comparison_config(path: str) -> dict[str, Any]:
 
 def _reject_non_standard_json_constant(value: str) -> None:
     raise ValueError(f"non-standard JSON constant is not allowed: {value}")
+
+
+def _validate_finite_json_numbers(value: Any, context: str, path: str = "$") -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise ValueError(f"{context} contains non-finite number at {path}: {value!r}")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_finite_json_numbers(item, context, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_finite_json_numbers(item, context, f"{path}[{index}]")
 
 
 def build_comparison_readme(result: dict[str, Any]) -> str:
@@ -1860,6 +1879,17 @@ def main() -> int:
                 "requires_90d": bool(args.require_90d),
                 "change_classification": str(args.change_classification),
             }
+        else:
+            try:
+                _validate_finite_json_numbers(result, "comparison result")
+            except ValueError as exc:
+                result = {
+                    "status": "insufficient",
+                    "reason": "invalid_comparison_artifact",
+                    "error": str(exc),
+                    "requires_90d": bool(args.require_90d),
+                    "change_classification": str(args.change_classification),
+                }
         output_root = Path(args.output_root)
         output_root.mkdir(parents=True, exist_ok=True)
         comparison_path = output_root / f"{_utc_slug()}-comparison.json"

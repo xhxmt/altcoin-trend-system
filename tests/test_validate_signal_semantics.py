@@ -1047,6 +1047,29 @@ def test_load_comparison_config_rejects_non_standard_json_constants(tmp_path, ar
 
 
 @pytest.mark.parametrize(
+    ("artifact_name", "artifact_text", "message"),
+    [
+        ("summary.json", '{"signal_count": 1e999}', "summary_path"),
+        ("metadata.json", '{"window_start": 1e999}', "metadata_path"),
+    ],
+)
+def test_load_comparison_config_rejects_overflowing_json_numbers(tmp_path, artifact_name, artifact_text, message):
+    summary_path = tmp_path / "summary.json"
+    metadata_path = tmp_path / "metadata.json"
+    summary_path.write_text(json.dumps({"signal_count": 30, "primary_label_complete_count": 30}), encoding="utf-8")
+    metadata_path.write_text(json.dumps(_comparison_metadata()), encoding="utf-8")
+    (tmp_path / artifact_name).write_text(artifact_text, encoding="utf-8")
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=rf"{message} for comparison config .*{artifact_name}.*non-finite number"):
+        _MODULE.load_comparison_config(str(config_path))
+
+
+@pytest.mark.parametrize(
     "config",
     [
         {"metadata_path": "metadata.json"},
@@ -1092,10 +1115,55 @@ def test_main_comparison_mode_writes_artifacts_for_bad_config(tmp_path, monkeypa
     assert result["reason"] == "invalid_comparison_config"
     assert "requires summary_path and metadata_path" in result["error"]
     assert "NaN" not in comparison_paths[0].read_text(encoding="utf-8")
+    assert "Infinity" not in comparison_paths[0].read_text(encoding="utf-8")
     assert "comparison_path=" in capsys.readouterr().out
 
 
-def test_main_comparison_mode_rejects_non_finite_result_serialization(tmp_path, monkeypatch):
+def test_main_comparison_mode_writes_artifacts_for_overflowing_config_number(tmp_path, monkeypatch, capsys):
+    summary_path = tmp_path / "summary.json"
+    metadata_path = tmp_path / "metadata.json"
+    bad_config_path = tmp_path / "bad-config.json"
+    candidate_config_path = tmp_path / "candidate-config.json"
+    output_root = tmp_path / "comparison-output"
+    summary_path.write_text(json.dumps({"signal_count": 30, "primary_label_complete_count": 30}), encoding="utf-8")
+    metadata_path.write_text('{"window_start": 1e999}', encoding="utf-8")
+    bad_config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+    candidate_config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_ultra_signal_production.py",
+            "--compare-baseline-config",
+            str(bad_config_path),
+            "--compare-candidate-config",
+            str(candidate_config_path),
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    assert _MODULE.main() == 0
+
+    comparison_paths = list(output_root.glob("*-comparison.json"))
+    assert len(comparison_paths) == 1
+    artifact_text = comparison_paths[0].read_text(encoding="utf-8")
+    result = json.loads(artifact_text)
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_config"
+    assert "non-finite number" in result["error"]
+    assert "NaN" not in artifact_text
+    assert "Infinity" not in artifact_text
+    assert "comparison_path=" in capsys.readouterr().out
+
+
+def test_main_comparison_mode_writes_artifacts_for_non_finite_comparison_result(tmp_path, monkeypatch):
     output_root = tmp_path / "comparison-output"
 
     monkeypatch.setattr(_MODULE, "load_comparison_config", lambda path: {"metadata": {}, "summary": {}})
@@ -1118,10 +1186,17 @@ def test_main_comparison_mode_rejects_non_finite_result_serialization(tmp_path, 
         ],
     )
 
-    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
-        _MODULE.main()
+    assert _MODULE.main() == 0
 
-    assert not list(output_root.glob("*-comparison.json"))
+    comparison_paths = list(output_root.glob("*-comparison.json"))
+    assert len(comparison_paths) == 1
+    artifact_text = comparison_paths[0].read_text(encoding="utf-8")
+    result = json.loads(artifact_text)
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_artifact"
+    assert "non-finite number" in result["error"]
+    assert "NaN" not in artifact_text
+    assert "Infinity" not in artifact_text
 
 
 def test_rule_config_hash_changes_when_rule_config_changes():

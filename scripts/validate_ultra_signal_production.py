@@ -1721,8 +1721,11 @@ def compare_validation_runs(
 def load_comparison_config(path: str) -> dict[str, Any]:
     config_path = Path(path)
     try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        config = json.loads(
+            config_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_standard_json_constant,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read comparison config {config_path}: {exc}") from exc
     if not isinstance(config, dict) or "summary_path" not in config or "metadata_path" not in config:
         raise ValueError(f"comparison config {config_path} requires summary_path and metadata_path")
@@ -1733,12 +1736,18 @@ def load_comparison_config(path: str) -> dict[str, Any]:
     if not metadata_path.is_absolute():
         metadata_path = config_path.parent / metadata_path
     try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        summary = json.loads(
+            summary_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_standard_json_constant,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read summary_path for comparison config {config_path}: {summary_path}: {exc}") from exc
     try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_standard_json_constant,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"failed to read metadata_path for comparison config {config_path}: {metadata_path}: {exc}") from exc
     if not isinstance(summary, dict) or not isinstance(metadata, dict):
         raise ValueError(f"comparison config {config_path} summary_path and metadata_path must contain JSON objects")
@@ -1746,6 +1755,10 @@ def load_comparison_config(path: str) -> dict[str, Any]:
         "summary": summary,
         "metadata": metadata,
     }
+
+
+def _reject_non_standard_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant is not allowed: {value}")
 
 
 def build_comparison_readme(result: dict[str, Any]) -> str:
@@ -1851,9 +1864,9 @@ def main() -> int:
         output_root.mkdir(parents=True, exist_ok=True)
         comparison_path = output_root / f"{_utc_slug()}-comparison.json"
         comparison_readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
-        comparison_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        comparison_path.write_text(json.dumps(result, allow_nan=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         comparison_readme_path.write_text(build_comparison_readme(result), encoding="utf-8")
-        print(json.dumps(result, sort_keys=True))
+        print(json.dumps(result, allow_nan=False, sort_keys=True))
         print(f"comparison_path={comparison_path}")
         print(f"comparison_readme_path={comparison_readme_path}")
         return 0

@@ -1024,6 +1024,29 @@ def test_load_comparison_config_resolves_paths_relative_to_config(tmp_path, monk
 
 
 @pytest.mark.parametrize(
+    ("artifact_name", "artifact_text", "message"),
+    [
+        ("summary.json", '{"signal_count": NaN}', "summary_path"),
+        ("metadata.json", '{"window_start": NaN}', "metadata_path"),
+    ],
+)
+def test_load_comparison_config_rejects_non_standard_json_constants(tmp_path, artifact_name, artifact_text, message):
+    summary_path = tmp_path / "summary.json"
+    metadata_path = tmp_path / "metadata.json"
+    summary_path.write_text(json.dumps({"signal_count": 30, "primary_label_complete_count": 30}), encoding="utf-8")
+    metadata_path.write_text(json.dumps(_comparison_metadata()), encoding="utf-8")
+    (tmp_path / artifact_name).write_text(artifact_text, encoding="utf-8")
+    config_path = tmp_path / "comparison.json"
+    config_path.write_text(
+        json.dumps({"summary_path": "summary.json", "metadata_path": "metadata.json"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=rf"{message} for comparison config .*{artifact_name}.*NaN"):
+        _MODULE.load_comparison_config(str(config_path))
+
+
+@pytest.mark.parametrize(
     "config",
     [
         {"metadata_path": "metadata.json"},
@@ -1068,7 +1091,37 @@ def test_main_comparison_mode_writes_artifacts_for_bad_config(tmp_path, monkeypa
     assert result["status"] == "insufficient"
     assert result["reason"] == "invalid_comparison_config"
     assert "requires summary_path and metadata_path" in result["error"]
+    assert "NaN" not in comparison_paths[0].read_text(encoding="utf-8")
     assert "comparison_path=" in capsys.readouterr().out
+
+
+def test_main_comparison_mode_rejects_non_finite_result_serialization(tmp_path, monkeypatch):
+    output_root = tmp_path / "comparison-output"
+
+    monkeypatch.setattr(_MODULE, "load_comparison_config", lambda path: {"metadata": {}, "summary": {}})
+    monkeypatch.setattr(
+        _MODULE,
+        "compare_validation_runs",
+        lambda *args, **kwargs: {"status": "insufficient", "comparison_window_start": float("nan")},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_ultra_signal_production.py",
+            "--compare-baseline-config",
+            str(tmp_path / "baseline.json"),
+            "--compare-candidate-config",
+            str(tmp_path / "candidate.json"),
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
+        _MODULE.main()
+
+    assert not list(output_root.glob("*-comparison.json"))
 
 
 def test_rule_config_hash_changes_when_rule_config_changes():

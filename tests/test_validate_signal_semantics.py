@@ -150,3 +150,77 @@ def test_default_validation_window_ends_24h_before_run_time():
 def test_default_validation_window_rejects_invalid_days():
     with pytest.raises(ValueError, match="window_days must be >= 1"):
         _MODULE.default_validation_window(0, now=datetime(2026, 4, 25, tzinfo=timezone.utc))
+
+
+def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypatch):
+    signal_ts = pd.Timestamp("2026-04-22T10:00:00Z")
+    available_ts = pd.Timestamp("2026-04-22T11:00:00Z")
+    feature_frame = pd.DataFrame(
+        [
+            {
+                "asset_id": 101,
+                "exchange": "binance",
+                "symbol": "LEAKUSDT",
+                "ts": signal_ts,
+                "close": 100.0,
+                "ultra_high_conviction": True,
+                "return_1h_pct": 12.0,
+                "return_4h_pct": 30.0,
+                "return_7d_pct": 80.0,
+                "return_24h_pct": 55.0,
+                "return_30d_pct": 90.0,
+                "volume_ratio_24h": 5.0,
+                "return_24h_rank": 1,
+                "return_24h_percentile": 0.99,
+                "return_7d_percentile": 0.99,
+                "return_30d_percentile": 0.9,
+                "quality_score": 95.0,
+                "breakout_20d": True,
+                "risk_flags": [],
+            }
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(_MODULE, "fetch_hourly_bars", lambda *args, **kwargs: pd.DataFrame([{"hourly": True}]))
+    monkeypatch.setattr(_MODULE, "_prepare_feature_frame", lambda hourly: feature_frame)
+
+    def fake_fetch_forward_1m_rows(engine, asset_id, start_ts, horizon):
+        captured["fetch_asset_id"] = asset_id
+        captured["fetch_start_ts"] = pd.Timestamp(start_ts)
+        captured["fetch_horizon"] = horizon
+        return pd.DataFrame([{"ts": available_ts, "high": 111.0, "low": 99.0}])
+
+    def fake_compute_forward_path_labels(scan_start_ts, close, future_1m):
+        captured["label_scan_start_ts"] = pd.Timestamp(scan_start_ts)
+        return {
+            "mfe_1h_pct": 11.0,
+            "mfe_4h_pct": 11.0,
+            "mfe_24h_pct": 11.0,
+            "mae_1h_pct": 0.0,
+            "mae_4h_pct": 0.0,
+            "mae_24h_pct": 0.0,
+            "mfe_before_dd8_pct": 11.0,
+            "mae_before_hit_10pct": 0.0,
+            "mae_after_hit_10pct": 0.0,
+            "hit_10pct_before_drawdown_8pct": True,
+            "hit_10pct_first": True,
+            "drawdown_8pct_first": False,
+            "time_to_hit_10pct_minutes": 0.0,
+            "time_to_drawdown_8pct_minutes": None,
+        }
+
+    monkeypatch.setattr(_MODULE, "fetch_forward_1m_rows", fake_fetch_forward_1m_rows)
+    monkeypatch.setattr(_MODULE, "compute_forward_path_labels", fake_compute_forward_path_labels)
+
+    _, rows = _MODULE.evaluate_signal_family(
+        object(),
+        "binance",
+        datetime(2026, 4, 22, 10, tzinfo=timezone.utc),
+        datetime(2026, 4, 22, 11, tzinfo=timezone.utc),
+        signal_family="ultra_high_conviction",
+    )
+
+    assert rows[0]["ts"] == "2026-04-22T10:00:00+00:00"
+    assert captured["fetch_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"
+    assert captured["label_scan_start_ts"].isoformat() == "2026-04-22T11:00:00+00:00"

@@ -550,7 +550,7 @@ def fetch_hourly_bars(engine: Engine, exchange: str, start: datetime, end: datet
     return pd.DataFrame(rows)
 
 
-def fetch_forward_1m_rows(engine: Engine, asset_id: int, signal_ts: datetime, horizon: timedelta) -> pd.DataFrame:
+def fetch_forward_1m_rows(engine: Engine, asset_id: int, start_ts: datetime | pd.Timestamp, horizon: timedelta) -> pd.DataFrame:
     statement = text(
         """
         SELECT
@@ -559,16 +559,17 @@ def fetch_forward_1m_rows(engine: Engine, asset_id: int, signal_ts: datetime, ho
             m.low
         FROM alt_core.market_1m AS m
         WHERE m.asset_id = :asset_id
-          AND m.ts > :signal_ts
-          AND m.ts <= :horizon_end
+          AND m.ts >= :start_ts
+          AND m.ts < :horizon_end
         ORDER BY m.ts
         """
     )
-    horizon_end = signal_ts + horizon
+    start_ts_utc = _coerce_utc_timestamp_value(start_ts).to_pydatetime()
+    horizon_end = (pd.Timestamp(start_ts_utc) + horizon).to_pydatetime()
     with engine.begin() as connection:
         rows = connection.execute(
             statement,
-            {"asset_id": asset_id, "signal_ts": signal_ts, "horizon_end": horizon_end},
+            {"asset_id": asset_id, "start_ts": start_ts_utc, "horizon_end": horizon_end},
         ).mappings().all()
     return pd.DataFrame(rows)
 
@@ -610,9 +611,10 @@ def evaluate_signal_family(
 
     evaluated: list[dict[str, Any]] = []
     for row in signals.sort_values(["ts", "symbol"]).to_dict("records"):
-        signal_ts = _coerce_utc_datetime(pd.Timestamp(row["ts"]).to_pydatetime())
-        future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), signal_ts, timedelta(hours=24))
-        labels = compute_forward_path_labels(pd.Timestamp(signal_ts), float(row["close"]), future_1m)
+        signal_ts = hour_bucket_start(pd.Timestamp(row["ts"]))
+        available_ts = signal_available_at(signal_ts)
+        future_1m = fetch_forward_1m_rows(engine, int(row["asset_id"]), available_ts, timedelta(hours=24))
+        labels = compute_forward_path_labels(available_ts, float(row["close"]), future_1m)
         evaluated.append(
             {
                 "ts": signal_ts.isoformat(),

@@ -1590,6 +1590,161 @@ def _required_finite_float(summary: dict[str, Any], key: str, field_name: str) -
     return _safe_finite_float(summary, key, field_name)
 
 
+def _required_finite_int(summary: dict[str, Any], key: str, field_name: str) -> tuple[int | None, dict[str, Any] | None]:
+    if key not in summary:
+        return None, {"status": "insufficient", "reason": "missing_comparison_metric", "invalid_field": field_name}
+    return _safe_finite_int(summary, key, field_name)
+
+
+def _comparison_mae_evidence(
+    baseline_summary: dict[str, Any],
+    candidate_summary: dict[str, Any],
+    *,
+    baseline_prefix: str,
+    candidate_prefix: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    baseline_has_abs_mae = "avg_abs_mae_24h_pct" in baseline_summary
+    candidate_has_abs_mae = "avg_abs_mae_24h_pct" in candidate_summary
+    baseline_has_signed_mae = "avg_mae_24h_pct" in baseline_summary
+    candidate_has_signed_mae = "avg_mae_24h_pct" in candidate_summary
+    baseline_abs_mae = None
+    candidate_abs_mae = None
+    baseline_signed_mae = None
+    candidate_signed_mae = None
+    mae_policy = "missing"
+    has_abs_mae_path = False
+    has_signed_mae_path = False
+    if baseline_has_abs_mae != candidate_has_abs_mae:
+        if baseline_has_abs_mae:
+            _, error = _safe_finite_float(
+                baseline_summary,
+                "avg_abs_mae_24h_pct",
+                f"{baseline_prefix}_avg_abs_mae_24h_pct",
+            )
+            if error is not None:
+                return None, error
+        if candidate_has_abs_mae:
+            _, error = _safe_finite_float(
+                candidate_summary,
+                "avg_abs_mae_24h_pct",
+                f"{candidate_prefix}_avg_abs_mae_24h_pct",
+            )
+            if error is not None:
+                return None, error
+    if baseline_has_abs_mae and candidate_has_abs_mae:
+        baseline_abs_mae, error = _safe_finite_float(
+            baseline_summary,
+            "avg_abs_mae_24h_pct",
+            f"{baseline_prefix}_avg_abs_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        candidate_abs_mae, error = _safe_finite_float(
+            candidate_summary,
+            "avg_abs_mae_24h_pct",
+            f"{candidate_prefix}_avg_abs_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        has_abs_mae_path = True
+    if baseline_has_signed_mae != candidate_has_signed_mae:
+        if baseline_has_signed_mae:
+            _, error = _safe_finite_float(
+                baseline_summary,
+                "avg_mae_24h_pct",
+                f"{baseline_prefix}_avg_mae_24h_pct",
+            )
+            if error is not None:
+                return None, error
+        if candidate_has_signed_mae:
+            _, error = _safe_finite_float(
+                candidate_summary,
+                "avg_mae_24h_pct",
+                f"{candidate_prefix}_avg_mae_24h_pct",
+            )
+            if error is not None:
+                return None, error
+    if baseline_has_signed_mae and candidate_has_signed_mae:
+        baseline_signed_mae, error = _safe_finite_float(
+            baseline_summary,
+            "avg_mae_24h_pct",
+            f"{baseline_prefix}_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        candidate_signed_mae, error = _safe_finite_float(
+            candidate_summary,
+            "avg_mae_24h_pct",
+            f"{candidate_prefix}_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        has_signed_mae_path = True
+    if not has_abs_mae_path and not has_signed_mae_path:
+        baseline_signed_mae, error = _required_finite_float(
+            baseline_summary,
+            "avg_mae_24h_pct",
+            f"{baseline_prefix}_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        candidate_signed_mae, error = _required_finite_float(
+            candidate_summary,
+            "avg_mae_24h_pct",
+            f"{candidate_prefix}_avg_mae_24h_pct",
+        )
+        if error is not None:
+            return None, error
+        has_signed_mae_path = True
+    if has_abs_mae_path and has_signed_mae_path:
+        mae_policy = "avg_abs_mae_24h_pct_or_avg_mae_24h_pct_abs_distance"
+    elif has_abs_mae_path:
+        mae_policy = "avg_abs_mae_24h_pct"
+    else:
+        mae_policy = "avg_mae_24h_pct_abs_distance"
+    abs_mae_path_risk_pass = candidate_abs_mae < baseline_abs_mae if has_abs_mae_path else None
+    signed_mae_path_risk_pass = (
+        abs(candidate_signed_mae) < abs(baseline_signed_mae) if has_signed_mae_path else None
+    )
+    mae_path_risk_passes = []
+    if abs_mae_path_risk_pass:
+        mae_path_risk_passes.append("avg_abs_mae_24h_pct")
+    if signed_mae_path_risk_pass:
+        mae_path_risk_passes.append("avg_mae_24h_pct_abs_distance")
+    return {
+        "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
+        "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
+        "baseline_avg_mae_24h_pct": baseline_signed_mae,
+        "candidate_avg_mae_24h_pct": candidate_signed_mae,
+        "mae_path_risk_policy": mae_policy,
+        "abs_mae_path_risk_pass": abs_mae_path_risk_pass,
+        "signed_mae_path_risk_pass": signed_mae_path_risk_pass,
+        "mae_path_risk_passes": mae_path_risk_passes,
+    }, None
+
+
+def _validate_required_90d_summary_metrics(
+    summary: dict[str, Any],
+    artifact_name: str,
+) -> dict[str, Any] | None:
+    _, error = _required_finite_int(summary, "signal_count", f"{artifact_name}_signal_count")
+    if error is not None:
+        return error
+    _, error = _required_finite_int(
+        summary,
+        "primary_label_complete_count",
+        f"{artifact_name}_primary_label_complete_count",
+    )
+    if error is not None:
+        return error
+    _, error = _required_finite_float(
+        summary,
+        "precision_before_dd8",
+        f"{artifact_name}_precision_before_dd8",
+    )
+    return error
+
+
 def _safe_metadata_datetime(value: Any) -> datetime | None:
     try:
         if isinstance(value, pd.Timestamp):
@@ -1730,126 +1885,19 @@ def compare_validation_runs(
     )
     if error is not None:
         return {**count_evidence, **error}
-    baseline_has_abs_mae = "avg_abs_mae_24h_pct" in baseline_summary
-    candidate_has_abs_mae = "avg_abs_mae_24h_pct" in candidate_summary
-    baseline_has_signed_mae = "avg_mae_24h_pct" in baseline_summary
-    candidate_has_signed_mae = "avg_mae_24h_pct" in candidate_summary
-    baseline_abs_mae = None
-    candidate_abs_mae = None
-    baseline_signed_mae = None
-    candidate_signed_mae = None
-    mae_policy = "missing"
-    has_abs_mae_path = False
-    has_signed_mae_path = False
-    if baseline_has_abs_mae != candidate_has_abs_mae:
-        if baseline_has_abs_mae:
-            _, error = _safe_finite_float(
-                baseline_summary,
-                "avg_abs_mae_24h_pct",
-                "baseline_avg_abs_mae_24h_pct",
-            )
-            if error is not None:
-                return {**count_evidence, **error}
-        if candidate_has_abs_mae:
-            _, error = _safe_finite_float(
-                candidate_summary,
-                "avg_abs_mae_24h_pct",
-                "candidate_avg_abs_mae_24h_pct",
-            )
-            if error is not None:
-                return {**count_evidence, **error}
-    if baseline_has_abs_mae and candidate_has_abs_mae:
-        baseline_abs_mae, error = _safe_finite_float(
-            baseline_summary,
-            "avg_abs_mae_24h_pct",
-            "baseline_avg_abs_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        candidate_abs_mae, error = _safe_finite_float(
-            candidate_summary,
-            "avg_abs_mae_24h_pct",
-            "candidate_avg_abs_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        has_abs_mae_path = True
-    if baseline_has_signed_mae != candidate_has_signed_mae:
-        if baseline_has_signed_mae:
-            _, error = _safe_finite_float(
-                baseline_summary,
-                "avg_mae_24h_pct",
-                "baseline_avg_mae_24h_pct",
-            )
-            if error is not None:
-                return {**count_evidence, **error}
-        if candidate_has_signed_mae:
-            _, error = _safe_finite_float(
-                candidate_summary,
-                "avg_mae_24h_pct",
-                "candidate_avg_mae_24h_pct",
-            )
-            if error is not None:
-                return {**count_evidence, **error}
-    if baseline_has_signed_mae and candidate_has_signed_mae:
-        baseline_signed_mae, error = _safe_finite_float(
-            baseline_summary,
-            "avg_mae_24h_pct",
-            "baseline_avg_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        candidate_signed_mae, error = _safe_finite_float(
-            candidate_summary,
-            "avg_mae_24h_pct",
-            "candidate_avg_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        has_signed_mae_path = True
-    if not has_abs_mae_path and not has_signed_mae_path:
-        baseline_signed_mae, error = _required_finite_float(
-            baseline_summary,
-            "avg_mae_24h_pct",
-            "baseline_avg_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        candidate_signed_mae, error = _required_finite_float(
-            candidate_summary,
-            "avg_mae_24h_pct",
-            "candidate_avg_mae_24h_pct",
-        )
-        if error is not None:
-            return {**count_evidence, **error}
-        has_signed_mae_path = True
-    if has_abs_mae_path and has_signed_mae_path:
-        mae_policy = "avg_abs_mae_24h_pct_or_avg_mae_24h_pct_abs_distance"
-    elif has_abs_mae_path:
-        mae_policy = "avg_abs_mae_24h_pct"
-    else:
-        mae_policy = "avg_mae_24h_pct_abs_distance"
-    abs_mae_path_risk_pass = candidate_abs_mae < baseline_abs_mae if has_abs_mae_path else None
-    signed_mae_path_risk_pass = (
-        abs(candidate_signed_mae) < abs(baseline_signed_mae) if has_signed_mae_path else None
+    mae_evidence, error = _comparison_mae_evidence(
+        baseline_summary,
+        candidate_summary,
+        baseline_prefix="baseline",
+        candidate_prefix="candidate",
     )
-    mae_path_risk_passes = []
-    if abs_mae_path_risk_pass:
-        mae_path_risk_passes.append("avg_abs_mae_24h_pct")
-    if signed_mae_path_risk_pass:
-        mae_path_risk_passes.append("avg_mae_24h_pct_abs_distance")
+    if error is not None:
+        return {**count_evidence, **error}
     evidence = {
         **count_evidence,
         "baseline_precision_before_dd8": baseline_precision,
         "candidate_precision_before_dd8": candidate_precision,
-        "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
-        "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
-        "baseline_avg_mae_24h_pct": baseline_signed_mae,
-        "candidate_avg_mae_24h_pct": candidate_signed_mae,
-        "mae_path_risk_policy": mae_policy,
-        "abs_mae_path_risk_pass": abs_mae_path_risk_pass,
-        "signed_mae_path_risk_pass": signed_mae_path_risk_pass,
-        "mae_path_risk_passes": mae_path_risk_passes,
+        **mae_evidence,
     }
     if baseline_metadata.get("coverage_status") != "trusted":
         return {
@@ -1873,16 +1921,18 @@ def compare_validation_runs(
         ninety_day_baseline_parts = _comparison_artifact_parts(ninety_day_baseline, "baseline_90d")
         if isinstance(ninety_day_baseline_parts, dict):
             return {**evidence, **ninety_day_baseline_parts}
-        ninety_day_baseline_metadata = ninety_day_baseline_parts[0]
+        ninety_day_baseline_metadata, ninety_day_baseline_summary = ninety_day_baseline_parts
     else:
         ninety_day_baseline_metadata = None
+        ninety_day_baseline_summary = None
     if ninety_day_candidate is not None:
         ninety_day_candidate_parts = _comparison_artifact_parts(ninety_day_candidate, "candidate_90d")
         if isinstance(ninety_day_candidate_parts, dict):
             return {**evidence, **ninety_day_candidate_parts}
-        ninety_day_candidate_metadata = ninety_day_candidate_parts[0]
+        ninety_day_candidate_metadata, ninety_day_candidate_summary = ninety_day_candidate_parts
     else:
         ninety_day_candidate_metadata = None
+        ninety_day_candidate_summary = None
     if ninety_day_baseline_metadata is not None and ninety_day_baseline_metadata.get("coverage_status") != "trusted":
         return {
             **evidence,
@@ -1921,6 +1971,17 @@ def compare_validation_runs(
                 "primary_window_end": primary_window_end,
                 "comparison_90d_window_end": comparison_90d_window_end,
             }
+    for artifact_name, summary in (
+        ("baseline_90d", ninety_day_baseline_summary),
+        ("candidate_90d", ninety_day_candidate_summary),
+    ):
+        if summary is None:
+            continue
+        metric_error = _validate_required_90d_summary_metrics(summary, artifact_name)
+        if metric_error is not None:
+            return {**evidence, **metric_error}
+    if (ninety_day_baseline_summary is None) != (ninety_day_candidate_summary is None):
+        return {**evidence, "status": "insufficient", "reason": "missing_required_90d_review"}
     if ninety_day_baseline_metadata is not None and ninety_day_candidate_metadata is not None:
         for field in COMPARISON_MATCH_FIELDS:
             if field in {"window_start", "window_end"}:
@@ -1941,6 +2002,14 @@ def compare_validation_runs(
                     "reason": "comparison_90d_context_mismatch",
                     "mismatched_90d_field": field,
                 }
+        _, metric_error = _comparison_mae_evidence(
+            ninety_day_baseline_summary,
+            ninety_day_candidate_summary,
+            baseline_prefix="baseline_90d",
+            candidate_prefix="candidate_90d",
+        )
+        if metric_error is not None:
+            return {**evidence, **metric_error}
     if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
         return {
             **evidence,
@@ -1948,7 +2017,7 @@ def compare_validation_runs(
             "reason": "sample_limited",
         }
     count_floor = baseline_count * 0.8
-    path_risk_pass = bool(abs_mae_path_risk_pass or signed_mae_path_risk_pass)
+    path_risk_pass = bool(evidence["abs_mae_path_risk_pass"] or evidence["signed_mae_path_risk_pass"])
     evidence_backed = candidate_precision >= baseline_precision and path_risk_pass and candidate_count >= count_floor
     return {
         **evidence,

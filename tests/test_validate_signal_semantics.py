@@ -35,6 +35,25 @@ def test_parse_signal_selector_rejects_unsupported_grade():
         _MODULE.parse_signal_selector("ultra_high_conviction_A")
 
 
+def test_signal_family_slug_preserves_ultra_compatibility():
+    selector = _MODULE.parse_signal_selector("ultra_high_conviction")
+
+    assert _MODULE._signal_family_slug("ultra_high_conviction") == "ultra"
+    assert _MODULE._signal_family_slug(selector) == "ultra"
+
+
+def test_required_features_preserves_ultra_validation_metadata_contract():
+    required_features = _MODULE._required_features("ultra_high_conviction")
+
+    assert "return_1h_pct" in required_features
+    assert "return_24h_rank" in required_features
+    assert "volume_ratio_24h" in required_features
+    assert "quality_score" in required_features
+    assert "breakout_20d" in required_features
+    assert "ultra_high_conviction" in required_features
+    assert required_features != list(_MODULE.SIGNAL_FAMILY_REGISTRY["ultra_high_conviction"].required_columns)
+
+
 def test_select_signal_rows_uses_registry_columns():
     frame = pd.DataFrame(
         [

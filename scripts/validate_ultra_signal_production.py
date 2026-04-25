@@ -114,6 +114,67 @@ SIGNAL_FAMILY_REGISTRY: dict[str, SignalFamilyDefinition] = {
     ),
 }
 
+SIGNAL_FAMILY_REQUIRED_FEATURES: dict[str, Sequence[str]] = {
+    "continuation": (
+        "return_1h_pct",
+        "return_4h_pct",
+        "return_24h_pct",
+        "return_7d_pct",
+        "return_30d_pct",
+        "return_24h_percentile",
+        "return_7d_percentile",
+        "return_30d_percentile",
+        "relative_strength_score",
+        "quality_score",
+        "volume_ratio_24h",
+        "breakout_20d",
+        "continuation_grade",
+        "risk_flags",
+    ),
+    "ignition": (
+        "return_1h_pct",
+        "return_4h_pct",
+        "return_24h_pct",
+        "return_24h_rank",
+        "return_24h_percentile",
+        "relative_strength_score",
+        "quality_score",
+        "volume_ratio_24h",
+        "volume_breakout_score",
+        "derivatives_score",
+        "ignition_grade",
+        "chase_risk_score",
+        "risk_flags",
+    ),
+    "reacceleration": (
+        "return_1h_pct",
+        "return_4h_pct",
+        "return_24h_pct",
+        "return_24h_percentile",
+        "return_7d_percentile",
+        "return_30d_percentile",
+        "quality_score",
+        "volume_ratio_24h",
+        "chase_risk_score",
+        "breakout_20d",
+        "reacceleration_grade",
+    ),
+    "ultra_high_conviction": (
+        "return_1h_pct",
+        "return_4h_pct",
+        "return_24h_pct",
+        "return_30d_pct",
+        "volume_ratio_24h",
+        "return_24h_rank",
+        "return_24h_percentile",
+        "return_7d_percentile",
+        "return_30d_percentile",
+        "quality_score",
+        "breakout_20d",
+        "ultra_high_conviction",
+    ),
+}
+
 
 def _utc_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -159,7 +220,10 @@ def _normalize_signal_family(value: str | SignalSelector) -> str:
 
 
 def _signal_family_slug(signal_family: str | SignalSelector) -> str:
-    return _coerce_signal_selector(signal_family).label.replace("_", "-")
+    selector = _coerce_signal_selector(signal_family)
+    if selector.family.name == "ultra_high_conviction" and selector.grade is None:
+        return "ultra"
+    return selector.label.replace("_", "-")
 
 
 def _signal_family_title(signal_family: str | SignalSelector) -> str:
@@ -181,11 +245,7 @@ def _legacy_signal_count_key(signal_family: str | SignalSelector) -> str:
 
 def _required_features(signal_family: str | SignalSelector) -> list[str]:
     selector = _coerce_signal_selector(signal_family)
-    required = list(selector.family.required_columns)
-    legacy_grade_column = f"{selector.family.name}_grade"
-    if selector.family.grade_column and legacy_grade_column not in required:
-        required.append(legacy_grade_column)
-    return required
+    return list(SIGNAL_FAMILY_REQUIRED_FEATURES[selector.family.name])
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:

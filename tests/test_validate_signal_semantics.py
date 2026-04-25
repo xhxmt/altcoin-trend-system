@@ -780,6 +780,31 @@ def test_compare_validation_runs_rejects_timestamp_and_horizon_semantic_mismatch
     assert result["mismatched_field"] == field
 
 
+@pytest.mark.parametrize("field", ["timestamp_semantics", "primary_label"])
+def test_compare_validation_runs_rejects_missing_required_primary_context_on_both_sides(field):
+    baseline_metadata = _comparison_metadata()
+    candidate_metadata = _comparison_metadata()
+    baseline_metadata.pop(field)
+    candidate_metadata.pop(field)
+    baseline = {"metadata": baseline_metadata, "summary": _comparison_summary()}
+    candidate = {
+        "metadata": candidate_metadata,
+        "summary": _comparison_summary(precision_before_dd8=0.8, avg_abs_mae_24h_pct=4.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_context_missing"
+    assert result["missing_field"] == field
+    assert result["missing_artifacts"] == ["baseline", "candidate"]
+
+
 def test_compare_validation_runs_marks_sample_limited():
     baseline = {
         "metadata": _comparison_metadata(),
@@ -1389,6 +1414,44 @@ def test_compare_validation_runs_rejects_90d_context_mismatch(candidate_metadata
     assert result["status"] == "insufficient"
     assert result["reason"] == "comparison_90d_context_mismatch"
     assert result["mismatched_90d_field"] == mismatched_field
+
+
+@pytest.mark.parametrize("field", ["timestamp_semantics", "primary_label"])
+def test_compare_validation_runs_rejects_required_90d_with_missing_context_on_both_sides(field):
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    baseline_90d_metadata = _comparison_metadata(window_start="2026-01-24T00:00:00+00:00")
+    candidate_90d_metadata = _comparison_metadata(window_start="2026-01-24T00:00:00+00:00")
+    baseline_90d_metadata.pop(field)
+    candidate_90d_metadata.pop(field)
+    ninety_day_baseline = {
+        "metadata": baseline_90d_metadata,
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": candidate_90d_metadata,
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_90d_context_missing"
+    assert result["missing_90d_field"] == field
+    assert result["missing_90d_artifacts"] == ["baseline", "candidate"]
 
 
 def test_compare_validation_runs_rejects_90d_window_end_mismatched_from_primary_window_end():

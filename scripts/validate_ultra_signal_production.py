@@ -1810,6 +1810,30 @@ def _validate_required_90d_window(metadata: dict[str, Any], artifact_name: str) 
     return None
 
 
+def _missing_required_comparison_context(
+    baseline_metadata: dict[str, Any],
+    candidate_metadata: dict[str, Any],
+    field: str,
+    *,
+    reason: str,
+    field_key: str,
+    artifact_key: str,
+) -> dict[str, Any] | None:
+    missing_artifacts = [
+        artifact_name
+        for artifact_name, metadata in (("baseline", baseline_metadata), ("candidate", candidate_metadata))
+        if field not in metadata or metadata[field] is None
+    ]
+    if not missing_artifacts:
+        return None
+    return {
+        "status": "insufficient",
+        "reason": reason,
+        field_key: field,
+        artifact_key: missing_artifacts,
+    }
+
+
 def compare_validation_runs(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -1913,6 +1937,16 @@ def compare_validation_runs(
     for field in COMPARISON_MATCH_FIELDS:
         if field in {"window_start", "window_end"}:
             continue
+        context_error = _missing_required_comparison_context(
+            baseline_metadata,
+            candidate_metadata,
+            field,
+            reason="comparison_context_missing",
+            field_key="missing_field",
+            artifact_key="missing_artifacts",
+        )
+        if context_error is not None:
+            return {**count_evidence, **context_error}
         if baseline_metadata.get(field) != candidate_metadata.get(field):
             return {
                 **count_evidence,
@@ -2044,6 +2078,16 @@ def compare_validation_runs(
                         "mismatched_90d_field": field,
                     }
                 continue
+            context_error = _missing_required_comparison_context(
+                ninety_day_baseline_metadata,
+                ninety_day_candidate_metadata,
+                field,
+                reason="comparison_90d_context_missing",
+                field_key="missing_90d_field",
+                artifact_key="missing_90d_artifacts",
+            )
+            if context_error is not None:
+                return {**evidence, **context_error}
             if ninety_day_baseline_metadata.get(field) != ninety_day_candidate_metadata.get(field):
                 return {
                     **evidence,

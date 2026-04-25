@@ -1589,6 +1589,27 @@ def _required_finite_float(summary: dict[str, Any], key: str, field_name: str) -
     return _safe_finite_float(summary, key, field_name)
 
 
+def _safe_metadata_datetime(value: Any) -> datetime | None:
+    try:
+        if isinstance(value, pd.Timestamp):
+            return _coerce_utc_datetime(value.to_pydatetime())
+        if isinstance(value, datetime):
+            return _coerce_utc_datetime(value)
+        if isinstance(value, str) and value.strip():
+            return _parse_datetime(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _validate_required_90d_window(metadata: dict[str, Any], artifact_name: str) -> dict[str, Any] | None:
+    window_start = _safe_metadata_datetime(metadata.get("window_start"))
+    window_end = _safe_metadata_datetime(metadata.get("window_end"))
+    if window_start is None or window_end is None or window_end - window_start < timedelta(days=90):
+        return {"status": "insufficient", "reason": f"{artifact_name}_window_too_short"}
+    return None
+
+
 def compare_validation_runs(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -1772,6 +1793,14 @@ def compare_validation_runs(
             "status": "insufficient",
             "reason": f"candidate_90d_{ninety_day_candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
         }
+    if ninety_day_baseline_metadata is not None:
+        window_error = _validate_required_90d_window(ninety_day_baseline_metadata, "baseline_90d")
+        if window_error is not None:
+            return {**evidence, **window_error}
+    if ninety_day_candidate_metadata is not None:
+        window_error = _validate_required_90d_window(ninety_day_candidate_metadata, "candidate_90d")
+        if window_error is not None:
+            return {**evidence, **window_error}
     if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
         return {
             **evidence,

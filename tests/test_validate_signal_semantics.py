@@ -1095,6 +1095,99 @@ def test_compare_validation_runs_requires_trusted_90d_review_for_material_change
     assert result["reason"] == "candidate_90d_material_gaps"
 
 
+def test_compare_validation_runs_rejects_trusted_30d_baseline_as_required_90d_review():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "baseline_90d_window_too_short"
+
+
+def test_compare_validation_runs_rejects_trusted_30d_candidate_as_required_90d_review():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "candidate_90d_window_too_short"
+
+
+@pytest.mark.parametrize(
+    "metadata_overrides",
+    [
+        {"window_start": None},
+        {"window_end": None},
+        {"window_start": "not-a-date"},
+    ],
+)
+def test_compare_validation_runs_handles_malformed_required_90d_window_as_insufficient(metadata_overrides):
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": {**_comparison_metadata(window_start="2026-01-24T00:00:00+00:00"), **metadata_overrides},
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "baseline_90d_window_too_short"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

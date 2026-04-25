@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
@@ -32,12 +33,16 @@ SIGNALS_FILENAME = "signals.csv"
 METADATA_FILENAME = "metadata.json"
 README_FILENAME = "README.md"
 VALIDATOR_VERSION = "signal_validation_trust_v1.1"
+FEATURE_PREPARATION_VERSION = "feature_v2"
 MARKET_1M_TIMESTAMP_SEMANTICS = "minute_open_utc"
 TIMESTAMP_SEMANTICS = "hour_bucket_start_utc"
 ENTRY_POLICY = "hour_close_proxy"
 FORWARD_SCAN_START_POLICY = "signal_available_at_inclusive"
 PRIMARY_LABEL = "+10_before_-8"
 PRIMARY_HORIZON_HOURS = 24
+MINIMUM_BASELINE_COMPLETE_COUNT = 20
+MINIMUM_CANDIDATE_COMPLETE_COUNT = 10
+COVERAGE_TRUST_THRESHOLD = 0.95
 SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
 SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
 HORIZON_TOLERANCE_MINUTES = {
@@ -595,6 +600,32 @@ def _required_features(signal_family: str | SignalSelector) -> list[str]:
     return list(SIGNAL_FAMILY_REQUIRED_FEATURES[selector.family.name])
 
 
+def rule_config_hash(rule_config: dict[str, Any]) -> str:
+    payload = json.dumps(rule_config, sort_keys=True, separators=(",", ":"), default=str)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def current_rule_config(signal_family: str | SignalSelector) -> dict[str, Any]:
+    selector = _coerce_signal_selector(signal_family)
+    family = selector.family
+    if family.name == "ultra_high_conviction":
+        return asdict(ULTRA_HIGH_CONVICTION_RULE)
+    return {
+        "family": family.name,
+        "selector": selector.label,
+        "candidate_column": family.candidate_column,
+        "grade_column": family.grade_column,
+        "grades": list(family.grades),
+    }
+
+
+def current_rule_version(signal_family: str | SignalSelector) -> tuple[str, str, dict[str, Any]]:
+    selector = _coerce_signal_selector(signal_family)
+    config = current_rule_config(selector)
+    config_hash = rule_config_hash(config)
+    return f"{selector.label}:{config_hash}", config_hash, config
+
+
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(float("nan"), index=frame.index, dtype="float64")
@@ -769,6 +800,38 @@ def summarize_evaluated_signals(
     }
 
 
+def determine_coverage_status(
+    summary: dict[str, Any],
+    *,
+    window_end: datetime,
+    run_started_at: datetime,
+    benchmark_status: str = "trusted",
+) -> str:
+    if benchmark_status != "trusted":
+        return benchmark_status
+    run_started = _coerce_utc_datetime(run_started_at)
+    end = _coerce_utc_datetime(window_end)
+    if end > run_started - timedelta(hours=24):
+        return "stale_data"
+    signal_count = int(summary.get("signal_count", 0))
+    complete_count = int(summary.get("primary_label_complete_count", 0))
+    if signal_count > 0 and complete_count / signal_count < COVERAGE_TRUST_THRESHOLD:
+        return "insufficient_forward_coverage"
+    if complete_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
+        return "insufficient_signal_count"
+    return "trusted"
+
+
+def check_benchmark_inputs(feature_frame: pd.DataFrame, exchange: str) -> str:
+    if feature_frame.empty or "symbol" not in feature_frame.columns or "exchange" not in feature_frame.columns:
+        return "benchmark_missing"
+    exchange_rows = feature_frame[feature_frame["exchange"].astype(str).eq(exchange)]
+    symbols = set(exchange_rows["symbol"].astype(str).str.upper())
+    if {"BTCUSDT", "ETHUSDT"}.issubset(symbols):
+        return "trusted"
+    return "benchmark_missing"
+
+
 def summarize_ultra_gate_flow(window: pd.DataFrame) -> dict[str, int]:
     if window.empty:
         return {
@@ -934,7 +997,7 @@ def evaluate_signal_family(
     market_end = end_utc + timedelta(hours=25)
     hourly = fetch_hourly_bars(engine, exchange=exchange, start=market_start, end=market_end)
     if hourly.empty:
-        return {
+        summary = {
             "signal_family": signal_family,
             "exchange": exchange,
             "from": start_utc.isoformat(),
@@ -945,7 +1008,15 @@ def evaluate_signal_family(
             "group_summary": summarize_signal_v2_groups(pd.DataFrame()),
             "sensitivity_matrix": build_sensitivity_matrix([]),
             **summarize_evaluated_signals([], signal_family=signal_family),
-        }, []
+        }
+        summary["benchmark_status"] = "benchmark_missing"
+        summary["coverage_status"] = determine_coverage_status(
+            summary,
+            window_end=end_utc,
+            run_started_at=datetime.now(timezone.utc),
+            benchmark_status=summary["benchmark_status"],
+        )
+        return summary, []
 
     features = _prepare_feature_frame(hourly)
     window = features[(features["ts"] >= pd.Timestamp(start_utc)) & (features["ts"] < pd.Timestamp(end_utc))].copy()
@@ -1050,6 +1121,14 @@ def evaluate_signal_family(
         "sensitivity_matrix": build_sensitivity_matrix(evaluated),
         **summarize_evaluated_signals(evaluated, signal_family=signal_family),
     }
+    benchmark_status = check_benchmark_inputs(features, exchange)
+    summary["coverage_status"] = determine_coverage_status(
+        summary,
+        window_end=end_utc,
+        run_started_at=datetime.now(timezone.utc),
+        benchmark_status=benchmark_status,
+    )
+    summary["benchmark_status"] = benchmark_status
     return summary, evaluated
 
 

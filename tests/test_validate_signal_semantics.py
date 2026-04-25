@@ -536,3 +536,74 @@ def test_summarize_evaluated_signals_excludes_incomplete_labels_from_denominator
     assert summary["avg_mae_24h_pct"] == -3.0
     assert summary["avg_abs_mae_24h_pct"] == 3.0
     assert summary["ambiguous_same_bar_count"] == 0
+
+
+def test_determine_coverage_status_marks_insufficient_forward_coverage():
+    summary = {
+        "signal_count": 100,
+        "primary_label_complete_count": 94,
+        "incomplete_label_count": 6,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 1, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "insufficient_forward_coverage"
+
+
+def test_determine_coverage_status_marks_stale_data_for_recent_window_end():
+    summary = {
+        "signal_count": 20,
+        "primary_label_complete_count": 20,
+        "incomplete_label_count": 0,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "stale_data"
+
+
+def test_determine_coverage_status_marks_insufficient_signal_count():
+    summary = {
+        "signal_count": 9,
+        "primary_label_complete_count": 9,
+        "incomplete_label_count": 0,
+    }
+
+    status = _MODULE.determine_coverage_status(
+        summary,
+        window_end=datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc),
+        run_started_at=datetime(2026, 4, 25, 1, 0, tzinfo=timezone.utc),
+        benchmark_status="trusted",
+    )
+
+    assert status == "insufficient_signal_count"
+
+
+def test_check_benchmark_inputs_marks_missing_btc_or_eth():
+    frame = pd.DataFrame(
+        [
+            {"exchange": "binance", "symbol": "BTCUSDT", "ts": pd.Timestamp("2026-04-24T00:00:00Z")},
+            {"exchange": "binance", "symbol": "SOLUSDT", "ts": pd.Timestamp("2026-04-24T00:00:00Z")},
+        ]
+    )
+
+    assert _MODULE.check_benchmark_inputs(frame, "binance") == "benchmark_missing"
+
+
+def test_rule_config_hash_changes_when_rule_config_changes():
+    first = _MODULE.rule_config_hash({"min_return_1h_pct": 12.0, "max_return_1h_pct": 35.0})
+    second = _MODULE.rule_config_hash({"min_return_1h_pct": 13.0, "max_return_1h_pct": 35.0})
+
+    assert first.startswith("sha256:")
+    assert second.startswith("sha256:")
+    assert first != second

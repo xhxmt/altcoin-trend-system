@@ -1603,6 +1603,13 @@ def _safe_metadata_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _normalized_metadata_datetime(value: Any) -> tuple[datetime | None, str | None]:
+    parsed = _safe_metadata_datetime(value)
+    if parsed is None:
+        return None, None
+    return parsed, parsed.isoformat()
+
+
 def _validate_required_90d_window(metadata: dict[str, Any], artifact_name: str) -> dict[str, Any] | None:
     window_start = _safe_metadata_datetime(metadata.get("window_start"))
     window_end = _safe_metadata_datetime(metadata.get("window_end"))
@@ -1628,9 +1635,15 @@ def compare_validation_runs(
         return candidate_parts
     baseline_metadata, baseline_summary = baseline_parts
     candidate_metadata, candidate_summary = candidate_parts
+    baseline_window_start, baseline_window_start_iso = _normalized_metadata_datetime(
+        baseline_metadata.get("window_start")
+    )
+    baseline_window_end, baseline_window_end_iso = _normalized_metadata_datetime(baseline_metadata.get("window_end"))
+    candidate_window_start, _ = _normalized_metadata_datetime(candidate_metadata.get("window_start"))
+    candidate_window_end, _ = _normalized_metadata_datetime(candidate_metadata.get("window_end"))
     metadata_evidence = {
-        "comparison_window_start": baseline_metadata.get("window_start"),
-        "comparison_window_end": baseline_metadata.get("window_end"),
+        "comparison_window_start": baseline_window_start_iso,
+        "comparison_window_end": baseline_window_end_iso,
         "baseline_rule_version": baseline_metadata.get("rule_version"),
         "candidate_rule_version": candidate_metadata.get("rule_version"),
         "baseline_git_sha": baseline_metadata.get("git_sha"),
@@ -1638,6 +1651,19 @@ def compare_validation_runs(
         "requires_90d": require_90d,
         "change_classification": change_classification,
     }
+    for field_name, parsed_value in (
+        ("baseline_window_start", baseline_window_start),
+        ("baseline_window_end", baseline_window_end),
+        ("candidate_window_start", candidate_window_start),
+        ("candidate_window_end", candidate_window_end),
+    ):
+        if parsed_value is None:
+            return {
+                **metadata_evidence,
+                "status": "insufficient",
+                "reason": "invalid_comparison_window",
+                "invalid_field": field_name,
+            }
 
     baseline_signal_count, error = _safe_finite_int(baseline_summary, "signal_count", "baseline_signal_count")
     if error is not None:
@@ -1666,10 +1692,30 @@ def compare_validation_runs(
         "baseline_primary_label_complete_count": baseline_count,
         "candidate_primary_label_complete_count": candidate_count,
     }
+    if baseline_window_start != candidate_window_start:
+        return {
+            **count_evidence,
+            "status": "insufficient",
+            "reason": "comparison_window_mismatch",
+            "mismatched_field": "window_start",
+        }
+    if baseline_window_end != candidate_window_end:
+        return {
+            **count_evidence,
+            "status": "insufficient",
+            "reason": "comparison_window_mismatch",
+            "mismatched_field": "window_end",
+        }
     for field in COMPARISON_MATCH_FIELDS:
+        if field in {"window_start", "window_end"}:
+            continue
         if baseline_metadata.get(field) != candidate_metadata.get(field):
-            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
-            return {**count_evidence, "status": "insufficient", "reason": reason, "mismatched_field": field}
+            return {
+                **count_evidence,
+                "status": "insufficient",
+                "reason": "comparison_context_mismatch",
+                "mismatched_field": field,
+            }
     baseline_precision, error = _required_finite_float(
         baseline_summary,
         "precision_before_dd8",
@@ -1857,12 +1903,15 @@ def compare_validation_runs(
         window_error = _validate_required_90d_window(ninety_day_candidate_metadata, "candidate_90d")
         if window_error is not None:
             return {**evidence, **window_error}
-    primary_window_end = baseline_metadata.get("window_end")
+    primary_window_end = baseline_window_end_iso
     for artifact_name, metadata in (
         ("baseline_90d", ninety_day_baseline_metadata),
         ("candidate_90d", ninety_day_candidate_metadata),
     ):
-        if metadata is not None and metadata.get("window_end") != primary_window_end:
+        if metadata is None:
+            continue
+        _, comparison_90d_window_end = _normalized_metadata_datetime(metadata.get("window_end"))
+        if comparison_90d_window_end != primary_window_end:
             return {
                 **evidence,
                 "status": "insufficient",
@@ -1870,10 +1919,21 @@ def compare_validation_runs(
                 "mismatched_90d_field": "window_end",
                 "mismatched_90d_artifact": artifact_name,
                 "primary_window_end": primary_window_end,
-                "comparison_90d_window_end": metadata.get("window_end"),
+                "comparison_90d_window_end": comparison_90d_window_end,
             }
     if ninety_day_baseline_metadata is not None and ninety_day_candidate_metadata is not None:
         for field in COMPARISON_MATCH_FIELDS:
+            if field in {"window_start", "window_end"}:
+                baseline_90d_window, _ = _normalized_metadata_datetime(ninety_day_baseline_metadata.get(field))
+                candidate_90d_window, _ = _normalized_metadata_datetime(ninety_day_candidate_metadata.get(field))
+                if baseline_90d_window != candidate_90d_window:
+                    return {
+                        **evidence,
+                        "status": "insufficient",
+                        "reason": "comparison_90d_context_mismatch",
+                        "mismatched_90d_field": field,
+                    }
+                continue
             if ninety_day_baseline_metadata.get(field) != ninety_day_candidate_metadata.get(field):
                 return {
                     **evidence,

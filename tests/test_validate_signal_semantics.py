@@ -699,6 +699,59 @@ def test_compare_validation_runs_rejects_window_mismatch():
     assert result["reason"] == "comparison_window_mismatch"
 
 
+def test_compare_validation_runs_rejects_identical_invalid_primary_windows():
+    baseline = {
+        "metadata": _comparison_metadata(window_start="not-a-date", window_end="also-not-a-date"),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(window_start="not-a-date", window_end="also-not-a-date"),
+        "summary": _comparison_summary(precision_before_dd8=0.8, avg_abs_mae_24h_pct=4.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_window"
+    assert result["invalid_field"] == "baseline_window_start"
+    assert result["comparison_window_start"] is None
+    assert result["comparison_window_end"] is None
+
+
+def test_compare_validation_runs_compares_equivalent_utc_primary_windows_as_equal():
+    baseline = {
+        "metadata": _comparison_metadata(
+            window_start="2026-03-25T00:00:00Z",
+            window_end="2026-04-24T00:00:00Z",
+        ),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(
+            window_start="2026-03-25T00:00:00+00:00",
+            window_end="2026-04-24T00:00:00+00:00",
+        ),
+        "summary": _comparison_summary(precision_before_dd8=0.8, avg_abs_mae_24h_pct=4.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "evidence_backed"
+    assert result["reason"] == "metrics_pass"
+    assert result["comparison_window_start"] == "2026-03-25T00:00:00+00:00"
+    assert result["comparison_window_end"] == "2026-04-24T00:00:00+00:00"
+
+
 @pytest.mark.parametrize(
     ("field", "candidate_value"),
     [

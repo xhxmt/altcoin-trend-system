@@ -712,6 +712,52 @@ def test_compare_validation_runs_marks_sample_limited():
 
     assert result["status"] == "experimental_only"
     assert result["reason"] == "sample_limited"
+    assert result["comparison_window_start"] == "2026-03-25T00:00:00+00:00"
+    assert result["comparison_window_end"] == "2026-04-24T00:00:00+00:00"
+    assert result["baseline_rule_version"] == "rule:v1"
+    assert result["candidate_rule_version"] == "rule:v1"
+    assert result["baseline_git_sha"] == "abc123"
+    assert result["candidate_git_sha"] == "abc123"
+    assert result["baseline_precision_before_dd8"] == 0.5
+    assert result["candidate_precision_before_dd8"] == 0.75
+    assert result["baseline_avg_abs_mae_24h_pct"] == 10.0
+    assert result["candidate_avg_abs_mae_24h_pct"] == 7.0
+    assert result["requires_90d"] is False
+    assert result["change_classification"] == "non_material"
+
+
+def test_compare_validation_runs_does_not_use_signal_count_as_complete_count_fallback():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 50,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 50,
+            "primary_label_complete_count": 0,
+            "precision_before_dd8": 0.75,
+            "avg_abs_mae_24h_pct": 7.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "experimental_only"
+    assert result["reason"] == "sample_limited"
+    assert result["baseline_signal_count"] == 50
+    assert result["candidate_signal_count"] == 50
+    assert result["baseline_primary_label_complete_count"] == 0
+    assert result["candidate_primary_label_complete_count"] == 0
 
 
 def test_compare_validation_runs_rejects_untrusted_baseline_coverage():

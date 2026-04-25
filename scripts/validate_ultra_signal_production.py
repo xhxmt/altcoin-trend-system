@@ -1532,64 +1532,23 @@ def compare_validation_runs(
 ) -> dict[str, Any]:
     baseline_metadata = baseline["metadata"]
     candidate_metadata = candidate["metadata"]
-    for field in COMPARISON_MATCH_FIELDS:
-        if baseline_metadata.get(field) != candidate_metadata.get(field):
-            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
-            return {"status": "insufficient", "reason": reason, "mismatched_field": field}
-    if baseline_metadata.get("coverage_status") != "trusted":
-        return {
-            "status": "insufficient",
-            "reason": f"baseline_{baseline_metadata.get('coverage_status', 'coverage_not_trusted')}",
-        }
-    if candidate_metadata.get("coverage_status") != "trusted":
-        return {
-            "status": "insufficient",
-            "reason": f"candidate_{candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
-        }
-    if change_classification not in {"material", "non_material"}:
-        return {"status": "insufficient", "reason": "missing_change_classification"}
-    if (require_90d or change_classification == "material") and (
-        ninety_day_baseline is None or ninety_day_candidate is None
-    ):
-        return {"status": "insufficient", "reason": "missing_required_90d_review"}
-    if ninety_day_baseline is not None and ninety_day_baseline["metadata"].get("coverage_status") != "trusted":
-        return {
-            "status": "insufficient",
-            "reason": f"baseline_90d_{ninety_day_baseline['metadata'].get('coverage_status', 'coverage_not_trusted')}",
-        }
-    if ninety_day_candidate is not None and ninety_day_candidate["metadata"].get("coverage_status") != "trusted":
-        return {
-            "status": "insufficient",
-            "reason": f"candidate_90d_{ninety_day_candidate['metadata'].get('coverage_status', 'coverage_not_trusted')}",
-        }
     baseline_summary = baseline["summary"]
     candidate_summary = candidate["summary"]
     baseline_signal_count = int(baseline_summary.get("signal_count", 0))
     candidate_signal_count = int(candidate_summary.get("signal_count", 0))
-    baseline_count = int(baseline_summary.get("primary_label_complete_count", baseline_signal_count))
-    candidate_count = int(candidate_summary.get("primary_label_complete_count", candidate_signal_count))
-    if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
-        return {
-            "status": "experimental_only",
-            "reason": "sample_limited",
-            "baseline_signal_count": baseline_signal_count,
-            "candidate_signal_count": candidate_signal_count,
-            "baseline_primary_label_complete_count": baseline_count,
-            "candidate_primary_label_complete_count": candidate_count,
-        }
+    baseline_count = int(baseline_summary.get("primary_label_complete_count", 0))
+    candidate_count = int(candidate_summary.get("primary_label_complete_count", 0))
     baseline_precision = float(baseline_summary.get("precision_before_dd8", 0.0))
     candidate_precision = float(candidate_summary.get("precision_before_dd8", 0.0))
     baseline_abs_mae = float(baseline_summary.get("avg_abs_mae_24h_pct", 0.0))
     candidate_abs_mae = float(candidate_summary.get("avg_abs_mae_24h_pct", 0.0))
-    count_floor = baseline_count * 0.8
-    evidence_backed = (
-        candidate_precision >= baseline_precision
-        and candidate_abs_mae < baseline_abs_mae
-        and candidate_count >= count_floor
-    )
-    return {
-        "status": "evidence_backed" if evidence_backed else "not_supported",
-        "reason": "metrics_pass" if evidence_backed else "metrics_do_not_pass",
+    evidence = {
+        "comparison_window_start": baseline_metadata.get("window_start"),
+        "comparison_window_end": baseline_metadata.get("window_end"),
+        "baseline_rule_version": baseline_metadata.get("rule_version"),
+        "candidate_rule_version": candidate_metadata.get("rule_version"),
+        "baseline_git_sha": baseline_metadata.get("git_sha"),
+        "candidate_git_sha": candidate_metadata.get("git_sha"),
         "baseline_signal_count": baseline_signal_count,
         "candidate_signal_count": candidate_signal_count,
         "baseline_primary_label_complete_count": baseline_count,
@@ -1600,12 +1559,57 @@ def compare_validation_runs(
         "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
         "requires_90d": require_90d,
         "change_classification": change_classification,
-        "comparison_window_start": baseline_metadata.get("window_start"),
-        "comparison_window_end": baseline_metadata.get("window_end"),
-        "baseline_rule_version": baseline_metadata.get("rule_version"),
-        "candidate_rule_version": candidate_metadata.get("rule_version"),
-        "baseline_git_sha": baseline_metadata.get("git_sha"),
-        "candidate_git_sha": candidate_metadata.get("git_sha"),
+    }
+    for field in COMPARISON_MATCH_FIELDS:
+        if baseline_metadata.get(field) != candidate_metadata.get(field):
+            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
+            return {**evidence, "status": "insufficient", "reason": reason, "mismatched_field": field}
+    if baseline_metadata.get("coverage_status") != "trusted":
+        return {
+            **evidence,
+            "status": "insufficient",
+            "reason": f"baseline_{baseline_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if candidate_metadata.get("coverage_status") != "trusted":
+        return {
+            **evidence,
+            "status": "insufficient",
+            "reason": f"candidate_{candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if change_classification not in {"material", "non_material"}:
+        return {**evidence, "status": "insufficient", "reason": "missing_change_classification"}
+    if (require_90d or change_classification == "material") and (
+        ninety_day_baseline is None or ninety_day_candidate is None
+    ):
+        return {**evidence, "status": "insufficient", "reason": "missing_required_90d_review"}
+    if ninety_day_baseline is not None and ninety_day_baseline["metadata"].get("coverage_status") != "trusted":
+        return {
+            **evidence,
+            "status": "insufficient",
+            "reason": f"baseline_90d_{ninety_day_baseline['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if ninety_day_candidate is not None and ninety_day_candidate["metadata"].get("coverage_status") != "trusted":
+        return {
+            **evidence,
+            "status": "insufficient",
+            "reason": f"candidate_90d_{ninety_day_candidate['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
+        return {
+            **evidence,
+            "status": "experimental_only",
+            "reason": "sample_limited",
+        }
+    count_floor = baseline_count * 0.8
+    evidence_backed = (
+        candidate_precision >= baseline_precision
+        and candidate_abs_mae < baseline_abs_mae
+        and candidate_count >= count_floor
+    )
+    return {
+        **evidence,
+        "status": "evidence_backed" if evidence_backed else "not_supported",
+        "reason": "metrics_pass" if evidence_backed else "metrics_do_not_pass",
     }
 
 

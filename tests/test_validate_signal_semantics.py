@@ -202,6 +202,11 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
             "label_complete_1h": False,
             "label_complete_4h": False,
             "label_complete_24h": False,
+            "expected_minutes_1h": 60,
+            "expected_minutes_4h": 240,
+            "expected_minutes_24h": 1440,
+            "missing_minutes_1h": 59,
+            "missing_minutes_4h": 239,
             "missing_minutes_24h": 1439,
             "mfe_1h_pct": 11.0,
             "mfe_4h_pct": 11.0,
@@ -209,6 +214,8 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
             "mae_1h_pct": 0.0,
             "mae_4h_pct": 0.0,
             "mae_24h_pct": 0.0,
+            "abs_mae_1h_pct": 1.0,
+            "abs_mae_4h_pct": 2.0,
             "abs_mae_24h_pct": 0.0,
             "mfe_before_dd8_pct": 11.0,
             "mae_before_hit_10pct": 0.0,
@@ -246,6 +253,15 @@ def test_evaluate_signal_family_scans_forward_from_signal_availability(monkeypat
     assert rows[0]["signal_available_at"] == "2026-04-22T11:00:00+00:00"
     assert rows[0]["entry_ts"] == "2026-04-22T11:00:00+00:00"
     assert rows[0]["path_results_json"] == '{"target_10_dd_8": {"hit": true}}'
+    assert rows[0]["expected_minutes_1h"] == 60
+    assert rows[0]["expected_minutes_4h"] == 240
+    assert rows[0]["expected_minutes_24h"] == 1440
+    assert rows[0]["missing_minutes_1h"] == 59
+    assert rows[0]["missing_minutes_4h"] == 239
+    assert rows[0]["missing_minutes_24h"] == 1439
+    assert rows[0]["abs_mae_1h_pct"] == 1.0
+    assert rows[0]["abs_mae_4h_pct"] == 2.0
+    assert rows[0]["abs_mae_24h_pct"] == 0.0
 
 
 def test_validation_path_labels_include_first_availability_minute_and_exclude_signal_bar():

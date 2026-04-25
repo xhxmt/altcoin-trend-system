@@ -247,6 +247,18 @@ def _current_git_sha(repo_dir: Path | None = None) -> str:
     return f"dirty:{sha}" if status_result.stdout.strip() else sha
 
 
+def _coerce_symbol_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    try:
+        return [str(item).strip() for item in value if str(item).strip()]
+    except TypeError:
+        text = str(value).strip()
+        return [text] if text else []
+
+
 def _window_slug(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -1494,6 +1506,8 @@ def main() -> int:
         output_root=output_root,
         signal_family=signal_family,
         git_sha=_current_git_sha(),
+        symbol_allowlist=_coerce_symbol_list(getattr(settings, "symbol_allowlist", None)),
+        symbol_blocklist=_coerce_symbol_list(getattr(settings, "symbol_blocklist", None)),
         coverage_status=str(summary.get("coverage_status", "insufficient_forward_coverage")),
         primary_label_complete_count=int(summary.get("primary_label_complete_count", 0)),
         incomplete_label_count=int(summary.get("incomplete_label_count", 0)),

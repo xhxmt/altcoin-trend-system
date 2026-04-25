@@ -1,7 +1,9 @@
 import csv
 import json
 import importlib.util
+import subprocess
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -23,7 +25,7 @@ write_artifacts = _MODULE.write_artifacts
 
 
 def test_main_passes_resolved_git_sha_to_metadata(monkeypatch, tmp_path):
-    captured: dict[str, str | None] = {}
+    captured: dict[str, object] = {}
     summary = {
         "exchange": "binance",
         "from": "2026-01-22T10:00:00+00:00",
@@ -38,6 +40,8 @@ def test_main_passes_resolved_git_sha_to_metadata(monkeypatch, tmp_path):
 
     def fake_build_run_metadata(**kwargs):
         captured["git_sha"] = kwargs.get("git_sha")
+        captured["symbol_allowlist"] = kwargs.get("symbol_allowlist")
+        captured["symbol_blocklist"] = kwargs.get("symbol_blocklist")
         return {
             "generated_at": "2026-04-23T12:06:03+00:00",
             "validation_window": {"from": summary["from"], "to": summary["to"]},
@@ -55,7 +59,11 @@ def test_main_passes_resolved_git_sha_to_metadata(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(_MODULE, "_current_git_sha", lambda: "dirty:abc123", raising=False)
-    monkeypatch.setattr(_MODULE, "load_settings", lambda: object())
+    monkeypatch.setattr(
+        _MODULE,
+        "load_settings",
+        lambda: SimpleNamespace(symbol_allowlist="SOLUSDT, ethusdt ", symbol_blocklist=" BTCUSDT "),
+    )
     monkeypatch.setattr(_MODULE, "build_engine", lambda settings: object())
     monkeypatch.setattr(_MODULE, "evaluate_signal_family", lambda *args, **kwargs: (summary, []))
     monkeypatch.setattr(_MODULE, "build_run_metadata", fake_build_run_metadata)
@@ -76,6 +84,8 @@ def test_main_passes_resolved_git_sha_to_metadata(monkeypatch, tmp_path):
 
     assert _MODULE.main() == 0
     assert captured["git_sha"] == "dirty:abc123"
+    assert captured["symbol_allowlist"] == ["SOLUSDT", "ethusdt"]
+    assert captured["symbol_blocklist"] == ["BTCUSDT"]
 
 
 def test_current_git_sha_marks_dirty_worktree(monkeypatch, tmp_path):
@@ -93,6 +103,28 @@ def test_current_git_sha_marks_dirty_worktree(monkeypatch, tmp_path):
 
     assert _MODULE._current_git_sha(tmp_path) == "dirty:abc123"
     assert calls == [["git", "rev-parse", "--short", "HEAD"], ["git", "status", "--porcelain"]]
+
+
+def test_current_git_sha_returns_clean_sha(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short", "HEAD"]:
+            return type("Result", (), {"stdout": "abc123\n"})()
+        if command == ["git", "status", "--porcelain"]:
+            return type("Result", (), {"stdout": ""})()
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", fake_run)
+
+    assert _MODULE._current_git_sha(tmp_path) == "abc123"
+
+
+def test_current_git_sha_returns_unknown_on_failure(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(returncode=128, cmd=command)
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", fake_run)
+
+    assert _MODULE._current_git_sha(tmp_path) == "unknown"
 
 
 def test_empty_hourly_summary_preserves_market_window_and_artifact_flow(monkeypatch, tmp_path):

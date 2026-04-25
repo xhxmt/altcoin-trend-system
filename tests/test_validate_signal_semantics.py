@@ -961,6 +961,75 @@ def test_compare_validation_runs_does_not_use_signal_count_as_complete_count_fal
     assert result["candidate_primary_label_complete_count"] == 0
 
 
+def test_compare_validation_runs_rejects_primary_complete_count_above_signal_count():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(
+            signal_count=0,
+            primary_label_complete_count=30,
+            precision_before_dd8=0.5,
+            avg_abs_mae_24h_pct=10.0,
+        ),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "baseline_primary_label_complete_count"
+    assert result["invalid_count_reason"] == "primary_label_complete_count_exceeds_signal_count"
+
+
+@pytest.mark.parametrize(
+    ("summary_overrides", "expected_field", "expected_count_reason"),
+    [
+        ({"signal_count": -1}, "baseline_signal_count", "signal_count_negative"),
+        (
+            {"primary_label_complete_count": -1},
+            "baseline_primary_label_complete_count",
+            "primary_label_complete_count_negative",
+        ),
+    ],
+)
+def test_compare_validation_runs_rejects_negative_primary_counts(
+    summary_overrides,
+    expected_field,
+    expected_count_reason,
+):
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            **_comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+            **summary_overrides,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == expected_field
+    assert result["invalid_count_reason"] == expected_count_reason
+
+
 @pytest.mark.parametrize(
     "baseline",
     [
@@ -1378,6 +1447,21 @@ def test_compare_validation_runs_rejects_90d_window_end_mismatched_from_primary_
             "invalid_comparison_metric",
             "baseline_90d_primary_label_complete_count",
         ),
+        (
+            {"primary_label_complete_count": 31},
+            "invalid_comparison_metric",
+            "baseline_90d_primary_label_complete_count",
+        ),
+        (
+            {"signal_count": -1},
+            "invalid_comparison_metric",
+            "baseline_90d_signal_count",
+        ),
+        (
+            {"primary_label_complete_count": -1},
+            "invalid_comparison_metric",
+            "baseline_90d_primary_label_complete_count",
+        ),
     ],
 )
 def test_compare_validation_runs_rejects_malformed_required_90d_summary_metrics(
@@ -1417,6 +1501,44 @@ def test_compare_validation_runs_rejects_malformed_required_90d_summary_metrics(
     assert result["status"] == "insufficient"
     assert result["reason"] == expected_reason
     assert result["invalid_field"] == expected_field
+
+
+def test_compare_validation_runs_rejects_impossible_candidate_90d_counts_for_material_review():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": _comparison_summary(
+            signal_count=0,
+            primary_label_complete_count=30,
+            precision_before_dd8=0.6,
+            avg_abs_mae_24h_pct=8.0,
+        ),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "invalid_comparison_metric"
+    assert result["invalid_field"] == "candidate_90d_primary_label_complete_count"
+    assert result["invalid_count_reason"] == "primary_label_complete_count_exceeds_signal_count"
 
 
 def test_compare_validation_runs_rejects_missing_candidate_90d_summary_metrics():

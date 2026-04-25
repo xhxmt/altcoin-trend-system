@@ -1548,6 +1548,13 @@ def _invalid_comparison_metric(field_name: str) -> dict[str, Any]:
     return {"status": "insufficient", "reason": "invalid_comparison_metric", "invalid_field": field_name}
 
 
+def _invalid_count_consistency(field_name: str, count_reason: str) -> dict[str, Any]:
+    return {
+        **_invalid_comparison_metric(field_name),
+        "invalid_count_reason": count_reason,
+    }
+
+
 def _safe_finite_int(summary: dict[str, Any], key: str, field_name: str) -> tuple[int | None, dict[str, Any] | None]:
     raw = summary.get(key, 0)
     if isinstance(raw, bool):
@@ -1594,6 +1601,28 @@ def _required_finite_int(summary: dict[str, Any], key: str, field_name: str) -> 
     if key not in summary:
         return None, {"status": "insufficient", "reason": "missing_comparison_metric", "invalid_field": field_name}
     return _safe_finite_int(summary, key, field_name)
+
+
+def _validate_count_consistency(
+    signal_count: int,
+    primary_label_complete_count: int,
+    *,
+    signal_count_field: str,
+    primary_label_complete_count_field: str,
+) -> dict[str, Any] | None:
+    if signal_count < 0:
+        return _invalid_count_consistency(signal_count_field, "signal_count_negative")
+    if primary_label_complete_count < 0:
+        return _invalid_count_consistency(
+            primary_label_complete_count_field,
+            "primary_label_complete_count_negative",
+        )
+    if primary_label_complete_count > signal_count:
+        return _invalid_count_consistency(
+            primary_label_complete_count_field,
+            "primary_label_complete_count_exceeds_signal_count",
+        )
+    return None
 
 
 def _comparison_mae_evidence(
@@ -1727,16 +1756,24 @@ def _validate_required_90d_summary_metrics(
     summary: dict[str, Any],
     artifact_name: str,
 ) -> dict[str, Any] | None:
-    _, error = _required_finite_int(summary, "signal_count", f"{artifact_name}_signal_count")
+    signal_count, error = _required_finite_int(summary, "signal_count", f"{artifact_name}_signal_count")
     if error is not None:
         return error
-    _, error = _required_finite_int(
+    primary_label_complete_count, error = _required_finite_int(
         summary,
         "primary_label_complete_count",
         f"{artifact_name}_primary_label_complete_count",
     )
     if error is not None:
         return error
+    count_error = _validate_count_consistency(
+        signal_count,
+        primary_label_complete_count,
+        signal_count_field=f"{artifact_name}_signal_count",
+        primary_label_complete_count_field=f"{artifact_name}_primary_label_complete_count",
+    )
+    if count_error is not None:
+        return count_error
     _, error = _required_finite_float(
         summary,
         "precision_before_dd8",
@@ -1840,6 +1877,18 @@ def compare_validation_runs(
     )
     if error is not None:
         return {**metadata_evidence, **error}
+    for signal_count, primary_label_complete_count, artifact_name in (
+        (baseline_signal_count, baseline_count, "baseline"),
+        (candidate_signal_count, candidate_count, "candidate"),
+    ):
+        count_error = _validate_count_consistency(
+            signal_count,
+            primary_label_complete_count,
+            signal_count_field=f"{artifact_name}_signal_count",
+            primary_label_complete_count_field=f"{artifact_name}_primary_label_complete_count",
+        )
+        if count_error is not None:
+            return {**metadata_evidence, **count_error}
     count_evidence = {
         **metadata_evidence,
         "baseline_signal_count": baseline_signal_count,

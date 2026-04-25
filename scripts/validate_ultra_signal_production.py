@@ -634,6 +634,24 @@ def resolve_validation_window(
     return start, end
 
 
+def _has_compare_args(args: argparse.Namespace) -> bool:
+    return any(
+        (
+            args.compare_baseline_config,
+            args.compare_candidate_config,
+            args.compare_90d_baseline_config,
+            args.compare_90d_candidate_config,
+            args.require_90d,
+            args.change_classification == "material",
+        )
+    )
+
+
+def _validate_cli_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if _has_compare_args(args):
+        parser.error("comparison mode is not implemented until Task 9")
+
+
 def parse_signal_selector(raw: str) -> SignalSelector:
     normalized = raw.strip().lower()
     if normalized == "ultra":
@@ -1532,6 +1550,7 @@ def main() -> int:
     parser.add_argument("--change-classification", choices=("material", "non_material"), default="non_material")
     parser.add_argument("--require-90d", action="store_true")
     args = parser.parse_args()
+    _validate_cli_mode(parser, args)
 
     settings = load_settings()
     engine = build_engine(settings)

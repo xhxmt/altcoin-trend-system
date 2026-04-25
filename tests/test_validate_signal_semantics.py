@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import sys
 from datetime import datetime, timezone
@@ -644,6 +645,50 @@ def test_resolve_validation_window_rejects_inverted_range():
             window_days=None,
             now=datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc),
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("compare_baseline_config", "baseline.json"),
+        ("compare_candidate_config", "candidate.json"),
+        ("compare_90d_baseline_config", "baseline-90d.json"),
+        ("compare_90d_candidate_config", "candidate-90d.json"),
+        ("require_90d", True),
+        ("change_classification", "material"),
+    ],
+)
+def test_validate_cli_mode_rejects_compare_flags(capsys, field, value):
+    parser = argparse.ArgumentParser(prog="validate_ultra_signal_production.py")
+    args = argparse.Namespace(
+        compare_baseline_config=None,
+        compare_candidate_config=None,
+        compare_90d_baseline_config=None,
+        compare_90d_candidate_config=None,
+        require_90d=False,
+        change_classification="non_material",
+    )
+    setattr(args, field, value)
+
+    with pytest.raises(SystemExit) as exc_info:
+        _MODULE._validate_cli_mode(parser, args)
+
+    assert exc_info.value.code == 2
+    assert "comparison mode is not implemented until Task 9" in capsys.readouterr().err
+
+
+def test_validate_cli_mode_allows_default_normal_validation_args():
+    parser = argparse.ArgumentParser(prog="validate_ultra_signal_production.py")
+    args = argparse.Namespace(
+        compare_baseline_config=None,
+        compare_candidate_config=None,
+        compare_90d_baseline_config=None,
+        compare_90d_candidate_config=None,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert _MODULE._validate_cli_mode(parser, args) is None
 
 
 def test_rule_config_hash_changes_when_rule_config_changes():

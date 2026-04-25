@@ -648,8 +648,12 @@ def test_resolve_validation_window_rejects_inverted_range():
         )
 
 
-def _comparison_metadata(window_start="2026-03-25T00:00:00+00:00", window_end="2026-04-24T00:00:00+00:00"):
-    return {
+def _comparison_metadata(
+    window_start="2026-03-25T00:00:00+00:00",
+    window_end="2026-04-24T00:00:00+00:00",
+    **overrides,
+):
+    metadata = {
         "window_start": window_start,
         "window_end": window_end,
         "exchange_universe": ["binance"],
@@ -668,6 +672,8 @@ def _comparison_metadata(window_start="2026-03-25T00:00:00+00:00", window_end="2
         "rule_version": "rule:v1",
         "git_sha": "abc123",
     }
+    metadata.update(overrides)
+    return metadata
 
 
 def _comparison_summary(**overrides):
@@ -1414,6 +1420,43 @@ def test_compare_validation_runs_rejects_90d_context_mismatch(candidate_metadata
     assert result["status"] == "insufficient"
     assert result["reason"] == "comparison_90d_context_mismatch"
     assert result["mismatched_90d_field"] == mismatched_field
+
+
+def test_compare_validation_runs_rejects_90d_context_that_matches_itself_but_not_primary():
+    baseline = {
+        "metadata": _comparison_metadata(selector="ignition"),
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    candidate = {
+        "metadata": _comparison_metadata(selector="ignition"),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+    ninety_day_metadata = _comparison_metadata(
+        window_start="2026-01-24T00:00:00+00:00",
+        selector="different_selector",
+    )
+    ninety_day_baseline = {
+        "metadata": ninety_day_metadata,
+        "summary": _comparison_summary(precision_before_dd8=0.5, avg_abs_mae_24h_pct=10.0),
+    }
+    ninety_day_candidate = {
+        "metadata": dict(ninety_day_metadata),
+        "summary": _comparison_summary(precision_before_dd8=0.6, avg_abs_mae_24h_pct=8.0),
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_90d_context_mismatch"
+    assert result["mismatched_90d_field"] == "selector"
+    assert result["mismatched_90d_artifact"] == "baseline_90d"
 
 
 @pytest.mark.parametrize("field", ["timestamp_semantics", "primary_label"])

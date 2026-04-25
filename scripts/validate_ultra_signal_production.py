@@ -2054,6 +2054,19 @@ def compare_validation_runs(
                 "primary_window_end": primary_window_end,
                 "comparison_90d_window_end": comparison_90d_window_end,
             }
+        for field in COMPARISON_MATCH_FIELDS:
+            if field in {"window_start", "window_end"}:
+                continue
+            if field not in metadata or metadata[field] is None:
+                continue
+            if metadata.get(field) != baseline_metadata.get(field):
+                return {
+                    **evidence,
+                    "status": "insufficient",
+                    "reason": "comparison_90d_context_mismatch",
+                    "mismatched_90d_field": field,
+                    "mismatched_90d_artifact": artifact_name,
+                }
     for artifact_name, summary in (
         ("baseline_90d", ninety_day_baseline_summary),
         ("candidate_90d", ninety_day_candidate_summary),

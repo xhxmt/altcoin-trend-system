@@ -45,6 +45,18 @@ PRIMARY_HORIZON_HOURS = 24
 MINIMUM_BASELINE_COMPLETE_COUNT = 20
 MINIMUM_CANDIDATE_COMPLETE_COUNT = 10
 COVERAGE_TRUST_THRESHOLD = 0.95
+COMPARISON_MATCH_FIELDS = (
+    "window_start",
+    "window_end",
+    "exchange_universe",
+    "symbol_allowlist",
+    "symbol_blocklist",
+    "feature_preparation_version",
+    "selector",
+    "timestamp_semantics",
+    "entry_policy",
+    "primary_label",
+)
 SENSITIVITY_TARGETS = (0.05, 0.10, 0.15)
 SENSITIVITY_DRAWDOWNS = (0.05, 0.08, 0.12)
 OPTIONAL_REPORTING_COLUMNS = [
@@ -648,8 +660,18 @@ def _has_compare_args(args: argparse.Namespace) -> bool:
 
 
 def _validate_cli_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if _has_compare_args(args):
-        parser.error("comparison mode is not implemented until Task 9")
+    has_primary_compare = bool(args.compare_baseline_config or args.compare_candidate_config)
+    if has_primary_compare and not (args.compare_baseline_config and args.compare_candidate_config):
+        parser.error("--compare-baseline-config and --compare-candidate-config must be provided together")
+    has_90d_compare = bool(args.compare_90d_baseline_config or args.compare_90d_candidate_config)
+    if has_90d_compare and not (args.compare_90d_baseline_config and args.compare_90d_candidate_config):
+        parser.error("--compare-90d-baseline-config and --compare-90d-candidate-config must be provided together")
+    if has_90d_compare and not has_primary_compare:
+        parser.error("90d comparison configs require comparison mode")
+    if args.require_90d and not has_primary_compare:
+        parser.error("--require-90d is only valid in comparison mode")
+    if args.change_classification == "material" and not has_primary_compare:
+        parser.error("--change-classification material is only valid in comparison mode")
 
 
 def parse_signal_selector(raw: str) -> SignalSelector:
@@ -1499,6 +1521,125 @@ def build_run_readme(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def compare_validation_runs(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    require_90d: bool,
+    change_classification: str,
+    ninety_day_baseline: dict[str, Any] | None = None,
+    ninety_day_candidate: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    baseline_metadata = baseline["metadata"]
+    candidate_metadata = candidate["metadata"]
+    for field in COMPARISON_MATCH_FIELDS:
+        if baseline_metadata.get(field) != candidate_metadata.get(field):
+            reason = "comparison_window_mismatch" if field in {"window_start", "window_end"} else "comparison_context_mismatch"
+            return {"status": "insufficient", "reason": reason, "mismatched_field": field}
+    if baseline_metadata.get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"baseline_{baseline_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if candidate_metadata.get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"candidate_{candidate_metadata.get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if change_classification not in {"material", "non_material"}:
+        return {"status": "insufficient", "reason": "missing_change_classification"}
+    if (require_90d or change_classification == "material") and (
+        ninety_day_baseline is None or ninety_day_candidate is None
+    ):
+        return {"status": "insufficient", "reason": "missing_required_90d_review"}
+    if ninety_day_baseline is not None and ninety_day_baseline["metadata"].get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"baseline_90d_{ninety_day_baseline['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
+    if ninety_day_candidate is not None and ninety_day_candidate["metadata"].get("coverage_status") != "trusted":
+        return {
+            "status": "insufficient",
+            "reason": f"candidate_90d_{ninety_day_candidate['metadata'].get('coverage_status', 'coverage_not_trusted')}",
+        }
+    baseline_summary = baseline["summary"]
+    candidate_summary = candidate["summary"]
+    baseline_signal_count = int(baseline_summary.get("signal_count", 0))
+    candidate_signal_count = int(candidate_summary.get("signal_count", 0))
+    baseline_count = int(baseline_summary.get("primary_label_complete_count", baseline_signal_count))
+    candidate_count = int(candidate_summary.get("primary_label_complete_count", candidate_signal_count))
+    if baseline_count < MINIMUM_BASELINE_COMPLETE_COUNT or candidate_count < MINIMUM_CANDIDATE_COMPLETE_COUNT:
+        return {
+            "status": "experimental_only",
+            "reason": "sample_limited",
+            "baseline_signal_count": baseline_signal_count,
+            "candidate_signal_count": candidate_signal_count,
+            "baseline_primary_label_complete_count": baseline_count,
+            "candidate_primary_label_complete_count": candidate_count,
+        }
+    baseline_precision = float(baseline_summary.get("precision_before_dd8", 0.0))
+    candidate_precision = float(candidate_summary.get("precision_before_dd8", 0.0))
+    baseline_abs_mae = float(baseline_summary.get("avg_abs_mae_24h_pct", 0.0))
+    candidate_abs_mae = float(candidate_summary.get("avg_abs_mae_24h_pct", 0.0))
+    count_floor = baseline_count * 0.8
+    evidence_backed = (
+        candidate_precision >= baseline_precision
+        and candidate_abs_mae < baseline_abs_mae
+        and candidate_count >= count_floor
+    )
+    return {
+        "status": "evidence_backed" if evidence_backed else "not_supported",
+        "reason": "metrics_pass" if evidence_backed else "metrics_do_not_pass",
+        "baseline_signal_count": baseline_signal_count,
+        "candidate_signal_count": candidate_signal_count,
+        "baseline_primary_label_complete_count": baseline_count,
+        "candidate_primary_label_complete_count": candidate_count,
+        "baseline_precision_before_dd8": baseline_precision,
+        "candidate_precision_before_dd8": candidate_precision,
+        "baseline_avg_abs_mae_24h_pct": baseline_abs_mae,
+        "candidate_avg_abs_mae_24h_pct": candidate_abs_mae,
+        "requires_90d": require_90d,
+        "change_classification": change_classification,
+        "comparison_window_start": baseline_metadata.get("window_start"),
+        "comparison_window_end": baseline_metadata.get("window_end"),
+        "baseline_rule_version": baseline_metadata.get("rule_version"),
+        "candidate_rule_version": candidate_metadata.get("rule_version"),
+        "baseline_git_sha": baseline_metadata.get("git_sha"),
+        "candidate_git_sha": candidate_metadata.get("git_sha"),
+    }
+
+
+def load_comparison_config(path: str) -> dict[str, Any]:
+    config_path = Path(path)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    summary_path = Path(config["summary_path"])
+    metadata_path = Path(config["metadata_path"])
+    return {
+        "summary": json.loads(summary_path.read_text(encoding="utf-8")),
+        "metadata": json.loads(metadata_path.read_text(encoding="utf-8")),
+    }
+
+
+def build_comparison_readme(result: dict[str, Any]) -> str:
+    lines = [
+        "# Signal Validation Comparison",
+        "",
+        f"- status: {result.get('status')}",
+        f"- reason: {result.get('reason')}",
+        f"- comparison_window_start: {result.get('comparison_window_start')}",
+        f"- comparison_window_end: {result.get('comparison_window_end')}",
+        f"- baseline_rule_version: {result.get('baseline_rule_version')}",
+        f"- candidate_rule_version: {result.get('candidate_rule_version')}",
+        f"- baseline_primary_label_complete_count: {result.get('baseline_primary_label_complete_count')}",
+        f"- candidate_primary_label_complete_count: {result.get('candidate_primary_label_complete_count')}",
+        f"- baseline_precision_before_dd8: {result.get('baseline_precision_before_dd8')}",
+        f"- candidate_precision_before_dd8: {result.get('candidate_precision_before_dd8')}",
+        f"- baseline_avg_abs_mae_24h_pct: {result.get('baseline_avg_abs_mae_24h_pct')}",
+        f"- candidate_avg_abs_mae_24h_pct: {result.get('candidate_avg_abs_mae_24h_pct')}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _serialize_csv_cell(value: Any) -> Any | str:
     if value is None:
         return ""
@@ -1551,6 +1692,34 @@ def main() -> int:
     parser.add_argument("--require-90d", action="store_true")
     args = parser.parse_args()
     _validate_cli_mode(parser, args)
+
+    if args.compare_baseline_config and args.compare_candidate_config:
+        baseline = load_comparison_config(args.compare_baseline_config)
+        candidate = load_comparison_config(args.compare_candidate_config)
+        ninety_day_baseline = (
+            load_comparison_config(args.compare_90d_baseline_config) if args.compare_90d_baseline_config else None
+        )
+        ninety_day_candidate = (
+            load_comparison_config(args.compare_90d_candidate_config) if args.compare_90d_candidate_config else None
+        )
+        result = compare_validation_runs(
+            baseline,
+            candidate,
+            require_90d=bool(args.require_90d),
+            change_classification=str(args.change_classification),
+            ninety_day_baseline=ninety_day_baseline,
+            ninety_day_candidate=ninety_day_candidate,
+        )
+        output_root = Path(args.output_root)
+        output_root.mkdir(parents=True, exist_ok=True)
+        comparison_path = output_root / f"{_utc_slug()}-comparison.json"
+        comparison_readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
+        comparison_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        comparison_readme_path.write_text(build_comparison_readme(result), encoding="utf-8")
+        print(json.dumps(result, sort_keys=True))
+        print(f"comparison_path={comparison_path}")
+        print(f"comparison_readme_path={comparison_readme_path}")
+        return 0
 
     settings = load_settings()
     engine = build_engine(settings)

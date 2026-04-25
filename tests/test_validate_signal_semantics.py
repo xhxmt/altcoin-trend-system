@@ -647,18 +647,204 @@ def test_resolve_validation_window_rejects_inverted_range():
         )
 
 
+def _comparison_metadata(window_start="2026-03-25T00:00:00+00:00", window_end="2026-04-24T00:00:00+00:00"):
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "exchange_universe": ["binance"],
+        "symbol_allowlist": [],
+        "symbol_blocklist": [],
+        "feature_preparation_version": "abc123",
+        "selector": "ignition",
+        "timestamp_semantics": "hour_bucket_start_utc",
+        "entry_policy": "hour_close_proxy",
+        "primary_label": "+10_before_-8",
+        "coverage_status": "trusted",
+        "rule_version": "rule:v1",
+        "git_sha": "abc123",
+    }
+
+
+def test_compare_validation_runs_rejects_window_mismatch():
+    baseline = {"metadata": _comparison_metadata(), "summary": {"signal_count": 20}}
+    candidate = {
+        "metadata": _comparison_metadata(window_end="2026-04-25T00:00:00+00:00"),
+        "summary": {"signal_count": 20},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "comparison_window_mismatch"
+
+
+def test_compare_validation_runs_marks_sample_limited():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 50,
+            "primary_label_complete_count": 4,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 50,
+            "primary_label_complete_count": 4,
+            "precision_before_dd8": 0.75,
+            "avg_abs_mae_24h_pct": 7.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "experimental_only"
+    assert result["reason"] == "sample_limited"
+
+
+def test_compare_validation_runs_rejects_untrusted_baseline_coverage():
+    baseline = {
+        "metadata": {**_comparison_metadata(), "coverage_status": "insufficient_forward_coverage"},
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {"signal_count": 30, "primary_label_complete_count": 30},
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "baseline_insufficient_forward_coverage"
+
+
+def test_compare_validation_runs_requires_90d_artifacts_when_requested():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.6,
+            "avg_abs_mae_24h_pct": 8.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "missing_required_90d_review"
+
+
+def test_compare_validation_runs_requires_trusted_90d_review_for_material_change():
+    baseline = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    candidate = {
+        "metadata": _comparison_metadata(),
+        "summary": {
+            "signal_count": 30,
+            "primary_label_complete_count": 30,
+            "precision_before_dd8": 0.6,
+            "avg_abs_mae_24h_pct": 8.0,
+        },
+    }
+    ninety_day_baseline = {
+        "metadata": _comparison_metadata(window_start="2026-01-24T00:00:00+00:00"),
+        "summary": {
+            "signal_count": 60,
+            "primary_label_complete_count": 60,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 10.0,
+        },
+    }
+    ninety_day_candidate = {
+        "metadata": {**_comparison_metadata(window_start="2026-01-24T00:00:00+00:00"), "coverage_status": "material_gaps"},
+        "summary": {
+            "signal_count": 60,
+            "primary_label_complete_count": 60,
+            "precision_before_dd8": 0.6,
+            "avg_abs_mae_24h_pct": 8.0,
+        },
+    }
+
+    result = _MODULE.compare_validation_runs(
+        baseline,
+        candidate,
+        require_90d=True,
+        change_classification="material",
+        ninety_day_baseline=ninety_day_baseline,
+        ninety_day_candidate=ninety_day_candidate,
+    )
+
+    assert result["status"] == "insufficient"
+    assert result["reason"] == "candidate_90d_material_gaps"
+
+
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("field", "value", "message"),
     [
-        ("compare_baseline_config", "baseline.json"),
-        ("compare_candidate_config", "candidate.json"),
-        ("compare_90d_baseline_config", "baseline-90d.json"),
-        ("compare_90d_candidate_config", "candidate-90d.json"),
-        ("require_90d", True),
-        ("change_classification", "material"),
+        (
+            "compare_baseline_config",
+            "baseline.json",
+            "--compare-baseline-config and --compare-candidate-config must be provided together",
+        ),
+        (
+            "compare_candidate_config",
+            "candidate.json",
+            "--compare-baseline-config and --compare-candidate-config must be provided together",
+        ),
+        (
+            "compare_90d_baseline_config",
+            "baseline-90d.json",
+            "--compare-90d-baseline-config and --compare-90d-candidate-config must be provided together",
+        ),
+        (
+            "compare_90d_candidate_config",
+            "candidate-90d.json",
+            "--compare-90d-baseline-config and --compare-90d-candidate-config must be provided together",
+        ),
+        ("require_90d", True, "--require-90d is only valid in comparison mode"),
+        ("change_classification", "material", "--change-classification material is only valid in comparison mode"),
     ],
 )
-def test_validate_cli_mode_rejects_compare_flags(capsys, field, value):
+def test_validate_cli_mode_rejects_invalid_compare_flag_combinations(capsys, field, value, message):
     parser = argparse.ArgumentParser(prog="validate_ultra_signal_production.py")
     args = argparse.Namespace(
         compare_baseline_config=None,
@@ -674,7 +860,21 @@ def test_validate_cli_mode_rejects_compare_flags(capsys, field, value):
         _MODULE._validate_cli_mode(parser, args)
 
     assert exc_info.value.code == 2
-    assert "comparison mode is not implemented until Task 9" in capsys.readouterr().err
+    assert message in capsys.readouterr().err
+
+
+def test_validate_cli_mode_allows_paired_comparison_configs():
+    parser = argparse.ArgumentParser(prog="validate_ultra_signal_production.py")
+    args = argparse.Namespace(
+        compare_baseline_config="baseline.json",
+        compare_candidate_config="candidate.json",
+        compare_90d_baseline_config=None,
+        compare_90d_candidate_config=None,
+        require_90d=False,
+        change_classification="non_material",
+    )
+
+    assert _MODULE._validate_cli_mode(parser, args) is None
 
 
 def test_validate_cli_mode_allows_default_normal_validation_args():

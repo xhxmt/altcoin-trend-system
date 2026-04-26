@@ -209,9 +209,9 @@ def test_dirty_paths_parses_normal_rename_and_untracked_paths(monkeypatch):
     class FakeCompleted:
         returncode = 0
         stdout = (
-            " M scripts/run_validation_evidence_package.py\n"
-            "R  docs/old-plan.md -> docs/superpowers/plans/new-plan.md\n"
-            "?? tests/test_new_validation.py\n"
+            " M scripts/run_validation_evidence_package.py\0"
+            "R  docs/superpowers/plans/new-plan.md\0docs/old-plan.md\0"
+            "?? tests/test_new_validation.py\0"
         )
         stderr = ""
 
@@ -228,7 +228,7 @@ def test_dirty_paths_parses_normal_rename_and_untracked_paths(monkeypatch):
 def test_dirty_paths_preserves_relevant_source_path_for_rename(monkeypatch):
     class FakeCompleted:
         returncode = 0
-        stdout = "R  scripts/foo.py -> README.md\n"
+        stdout = "R  README.md\0scripts/foo.py\0"
         stderr = ""
 
     monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
@@ -237,6 +237,23 @@ def test_dirty_paths_preserves_relevant_source_path_for_rename(monkeypatch):
 
     assert paths == ["scripts/foo.py", "README.md"]
     assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo.py"]
+
+
+def test_dirty_paths_preserves_relevant_source_path_with_spaces_in_real_repo(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    script_path = repo / "scripts" / "foo bar.py"
+    script_path.parent.mkdir()
+    script_path.write_text("print('base')\n", encoding="utf-8")
+    _run_git(repo, "add", "scripts/foo bar.py")
+    _run_git(repo, "commit", "-m", "initial")
+
+    _run_git(repo, "mv", "scripts/foo bar.py", "README.md")
+
+    paths = _MODULE.dirty_paths(cwd=repo)
+
+    assert paths == ["scripts/foo bar.py", "README.md"]
+    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo bar.py"]
 
 
 def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path):
@@ -293,6 +310,31 @@ def test_archive_dirty_diff_captures_staged_binary_patch(tmp_path):
     assert result is not None
     patch_text = Path(result).read_text(encoding="utf-8")
     assert "GIT binary patch" in patch_text
+
+
+def test_archive_dirty_diff_replays_staged_then_unstaged_binary_changes(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    binary_path = repo / "scripts" / "fixture.bin"
+    binary_path.parent.mkdir()
+    binary_path.write_bytes(b"\x00base-binary\n")
+    _run_git(repo, "add", "scripts/fixture.bin")
+    _run_git(repo, "commit", "-m", "initial")
+
+    binary_path.write_bytes(b"\x00staged-binary\n")
+    _run_git(repo, "add", "scripts/fixture.bin")
+    final_bytes = b"\x00final-binary\n"
+    binary_path.write_bytes(final_bytes)
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=["scripts/fixture.bin"])
+    assert result is not None
+    replay = tmp_path / "replay"
+    _run_git(tmp_path, "clone", str(repo), str(replay))
+    _run_git(replay, "apply", str(result))
+
+    assert (replay / "scripts" / "fixture.bin").read_bytes() == final_bytes
 
 
 def test_archive_dirty_diff_returns_none_for_untracked_binary_only(tmp_path):

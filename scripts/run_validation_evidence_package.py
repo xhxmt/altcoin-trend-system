@@ -188,17 +188,28 @@ def current_git_sha(*, cwd: Path) -> str:
 
 
 def dirty_paths(*, cwd: Path) -> list[str]:
-    output = git_output(["git", "status", "--short"], cwd=cwd)
+    output = git_output(["git", "status", "--porcelain=v1", "-z"], cwd=cwd)
+    entries = [entry for entry in output.split("\0") if entry]
     paths: list[str] = []
-    for line in output.splitlines():
-        if not line.strip():
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        if len(entry) < 4:
+            index += 1
             continue
-        path = line[3:].strip()
-        if " -> " in path:
-            source, destination = path.split(" -> ", 1)
-            paths.extend([source.strip(), destination.strip()])
+        status = entry[:2]
+        path = entry[3:]
+        if "R" in status or "C" in status:
+            if index + 1 >= len(entries):
+                paths.append(path)
+                index += 1
+                continue
+            source = entries[index + 1]
+            paths.extend([source, path])
+            index += 2
             continue
         paths.append(path)
+        index += 1
     return paths
 
 
@@ -217,7 +228,7 @@ def _git_diff_output(argv: list[str], *, cwd: Path) -> str | None:
 
 def _untracked_paths(*, cwd: Path, paths: list[str]) -> list[str] | None:
     completed = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard", "--", *paths],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", *paths],
         cwd=cwd,
         text=True,
         capture_output=True,
@@ -225,7 +236,7 @@ def _untracked_paths(*, cwd: Path, paths: list[str]) -> list[str] | None:
     )
     if completed.returncode != 0:
         return None
-    return sorted(path for path in completed.stdout.splitlines() if path.strip())
+    return sorted(path for path in completed.stdout.split("\0") if path)
 
 
 def _archive_untracked_path(*, cwd: Path, path: str) -> str | None:
@@ -258,23 +269,32 @@ def _archive_untracked_path(*, cwd: Path, path: str) -> str | None:
 def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str | None:
     if not paths:
         return None
-    unstaged_diff = _git_diff_output(["git", "diff", "--binary", "--", *paths], cwd=cwd)
-    staged_diff = _git_diff_output(["git", "diff", "--cached", "--binary", "--", *paths], cwd=cwd)
+    tracked_diff = _git_diff_output(["git", "diff", "HEAD", "--binary", "--", *paths], cwd=cwd)
     untracked = _untracked_paths(cwd=cwd, paths=paths)
-    if unstaged_diff is None or staged_diff is None or untracked is None:
+    if tracked_diff is None or untracked is None:
         return None
-    chunks = [chunk.rstrip("\n") for chunk in (unstaged_diff, staged_diff) if chunk.strip()]
+    chunks = [tracked_diff] if tracked_diff.strip() else []
     for path in untracked:
         untracked_archive = _archive_untracked_path(cwd=cwd, path=path)
         if untracked_archive is None:
             return None
-        chunks.append(untracked_archive.rstrip("\n"))
-    archive_text = "\n\n".join(chunk for chunk in chunks if chunk.strip())
+        chunks.append(untracked_archive)
+    archive_text = ""
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+        if archive_text and not archive_text.endswith("\n"):
+            archive_text += "\n"
+        if archive_text and not archive_text.endswith("\n\n"):
+            archive_text += "\n"
+        archive_text += chunk
+        if not archive_text.endswith("\n"):
+            archive_text += "\n"
     if not archive_text:
         return None
     package_dir.mkdir(parents=True, exist_ok=True)
     diff_path = package_dir / "dirty_diff.patch"
-    diff_path.write_text(f"{archive_text}\n", encoding="utf-8")
+    diff_path.write_text(archive_text, encoding="utf-8")
     return str(diff_path)
 
 

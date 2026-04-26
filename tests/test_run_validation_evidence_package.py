@@ -142,6 +142,7 @@ def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
         "src/altcoin_trend/signals/v2.py",
         "tests/test_signal_v2.py",
         "docs/superpowers/specs/2026-04-25-validation-evidence-package-design.md",
+        "docs/superpowers/plans/2026-04-25-validation-evidence-package.md",
         "README.md",
     ]
 
@@ -150,6 +151,7 @@ def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
         "src/altcoin_trend/signals/v2.py",
         "tests/test_signal_v2.py",
         "docs/superpowers/specs/2026-04-25-validation-evidence-package-design.md",
+        "docs/superpowers/plans/2026-04-25-validation-evidence-package.md",
     ]
 
 

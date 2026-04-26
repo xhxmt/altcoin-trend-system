@@ -906,10 +906,11 @@ def calculate_package_status(
         overall_status = "passed"
     comparison_status = comparison.get("comparison_status")
     threshold_decision_status = "no_decision"
-    if not gate_failed and comparison_status == "evidence_backed" and not diagnostic:
-        threshold_decision_status = "supported"
-    elif comparison_status in {"not_supported", "experimental_only", "insufficient"}:
-        threshold_decision_status = "not_supported"
+    if not gate_failed and not diagnostic:
+        if comparison_status == "evidence_backed":
+            threshold_decision_status = "supported"
+        elif comparison_status in {"not_supported", "experimental_only", "insufficient"}:
+            threshold_decision_status = "not_supported"
     return {
         "gate_status": "failed" if gate_failed else "passed",
         "formal_evidence_gate_passed": not gate_failed,

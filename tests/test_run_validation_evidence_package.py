@@ -1263,6 +1263,59 @@ def test_calculate_status_blocks_evidence_backed_decision_with_archived_dirty_di
     assert decision == "This package is not a formal evidence gate for production threshold decisions."
 
 
+def test_calculate_status_keeps_no_decision_for_failed_gate_with_insufficient_comparison():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "failed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "insufficient"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["threshold_decision_status"] == "no_decision"
+
+
+def test_calculate_status_keeps_no_decision_for_not_supported_with_archived_dirty_diff():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "not_supported"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=["scripts/run_validation_evidence_package.py"],
+        dirty_diff_path="artifacts/package/dirty_diff.patch",
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "passed_with_diagnostics"
+    assert status["threshold_decision_status"] == "no_decision"
+
+
+def test_calculate_status_returns_not_supported_for_clean_insufficient_comparison():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "insufficient"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "passed"
+    assert status["formal_evidence_gate_passed"] is True
+    assert status["overall_status"] == "passed"
+    assert status["threshold_decision_status"] == "not_supported"
+
+
 def test_calculate_status_fails_when_db_smoke_is_skipped():
     status = _MODULE.calculate_package_status(
         commands=[{"classification": "passed"}],

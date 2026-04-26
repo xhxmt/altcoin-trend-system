@@ -59,6 +59,38 @@ COUNT_REQUIRED_FIELDS = (
     "incomplete_label_count",
 )
 SAFE_SELECTOR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+ALLOWED_COMPARISON_STATUSES = {
+    "evidence_backed",
+    "not_supported",
+    "experimental_only",
+    "insufficient",
+}
+EVIDENCE_BACKED_REQUIRED_COMPARISON_FIELDS = (
+    "comparison_window_start",
+    "comparison_window_end",
+    "baseline_primary_label_complete_count",
+    "candidate_primary_label_complete_count",
+    "baseline_precision_before_dd8",
+    "candidate_precision_before_dd8",
+    "baseline_avg_abs_mae_24h_pct",
+    "candidate_avg_abs_mae_24h_pct",
+    "baseline_avg_mae_24h_pct",
+    "candidate_avg_mae_24h_pct",
+    "mae_path_risk_policy",
+    "path_risk_pass",
+    "requires_90d",
+)
+EVIDENCE_BACKED_REQUIRED_90D_COMPARISON_FIELDS = (
+    "baseline_90d_primary_label_complete_count",
+    "candidate_90d_primary_label_complete_count",
+    "baseline_90d_precision_before_dd8",
+    "candidate_90d_precision_before_dd8",
+    "baseline_90d_avg_abs_mae_24h_pct",
+    "candidate_90d_avg_abs_mae_24h_pct",
+    "baseline_90d_avg_mae_24h_pct",
+    "candidate_90d_avg_mae_24h_pct",
+    "metrics_pass_90d",
+)
 
 
 @dataclass(frozen=True)
@@ -567,8 +599,48 @@ def discover_comparison_result(
     return comparison_path, readme_path
 
 
+def validate_comparison_result(result: dict[str, Any], *, comparison_path: Path) -> dict[str, Any]:
+    status = result.get("status")
+    reason = result.get("reason")
+    if not isinstance(status, str) or status not in ALLOWED_COMPARISON_STATUSES:
+        raise ValueError("comparison result status is missing or invalid")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("comparison result reason is missing or invalid")
+    if status == "evidence_backed":
+        if not comparison_path.is_file():
+            raise ValueError("comparison result path is missing")
+        missing = [field for field in EVIDENCE_BACKED_REQUIRED_COMPARISON_FIELDS if field not in result]
+        if missing:
+            raise ValueError(f"evidence_backed comparison result missing required fields: {missing}")
+        if result.get("requires_90d") is True:
+            missing_90d = [field for field in EVIDENCE_BACKED_REQUIRED_90D_COMPARISON_FIELDS if field not in result]
+            if missing_90d:
+                raise ValueError(f"evidence_backed 90d comparison result missing required fields: {missing_90d}")
+            if result.get("metrics_pass_90d") is not True:
+                raise ValueError("evidence_backed 90d comparison result did not pass 90d metrics")
+    return result
+
+
+def malformed_comparison_result(
+    *,
+    error: Exception,
+    command: dict[str, Any],
+    config: dict[str, Any],
+    selector: str,
+) -> dict[str, Any]:
+    return {
+        "comparison_status": "insufficient",
+        "reason": "malformed_comparison_result",
+        "threshold_decision_status": "no_decision",
+        "error": str(error),
+        "command": command,
+        "change_id": config.get("change_id"),
+        "selector": selector,
+    }
+
+
 def run_comparison_config(*, config: dict[str, Any], package_dir: Path, cwd: Path) -> dict[str, Any]:
-    selector = str(config["selector"])
+    selector = validate_selector_name(str(config["selector"]))
     comparison_dir = package_dir / "comparisons" / selector
     generated_config_dir = comparison_dir / "configs"
     output_root = comparison_dir / "output"
@@ -615,13 +687,17 @@ def run_comparison_config(*, config: dict[str, Any], package_dir: Path, cwd: Pat
             "threshold_decision_status": "no_decision",
             "command": record,
             "change_id": config.get("change_id"),
+            "selector": selector,
         }
-    comparison_path, readme_path = discover_comparison_result(
-        output_root,
-        stdout_log=Path(str(record.get("stdout_log"))) if record.get("stdout_log") else None,
-        comparison_dir=comparison_dir,
-    )
-    result = read_json_object(comparison_path)
+    try:
+        comparison_path, readme_path = discover_comparison_result(
+            output_root,
+            stdout_log=Path(str(record.get("stdout_log"))) if record.get("stdout_log") else None,
+            comparison_dir=comparison_dir,
+        )
+        result = validate_comparison_result(read_json_object(comparison_path), comparison_path=comparison_path)
+    except Exception as exc:
+        return malformed_comparison_result(command=record, config=config, selector=selector, error=exc)
     status = str(result.get("status", "insufficient"))
     threshold_decision_status = "supported" if status == "evidence_backed" else "not_supported"
     return {
@@ -1058,7 +1134,9 @@ def calculate_package_status(
     comparison_status = comparison.get("comparison_status")
     threshold_decision_status = "no_decision"
     if not gate_failed and not diagnostic:
-        if comparison_status == "evidence_backed":
+        if comparison.get("threshold_decision_status") == "no_decision":
+            threshold_decision_status = "no_decision"
+        elif comparison_status == "evidence_backed":
             threshold_decision_status = "supported"
         elif comparison_status in {"not_supported", "experimental_only", "insufficient"}:
             threshold_decision_status = "not_supported"
@@ -1348,12 +1426,8 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
         elif len(configs) == 1:
             manifest["comparison"] = run_comparison_config(config=configs[0], package_dir=package_dir, cwd=cwd)
         else:
-            manifest["comparison"] = {
-                "comparison_status": "insufficient",
-                "reason": "multiple_traceable_comparison_configs_not_supported_in_p0",
-                "threshold_decision_status": "no_decision",
-                "config_count": len(configs),
-            }
+            manifest["comparison"] = comparison_not_run("multiple_traceable_comparison_configs_not_supported_in_p0")
+            manifest["comparison"]["config_count"] = len(configs)
         manifest.update(
             calculate_package_status(
                 commands=list(manifest["commands"]),

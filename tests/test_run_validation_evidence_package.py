@@ -209,6 +209,23 @@ def test_classify_pytest_junit_sums_testsuites_root(tmp_path):
     }
 
 
+def test_classify_pytest_junit_rejects_zero_test_junit(tmp_path):
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite tests="0" failures="0" errors="0" skipped="0"></testsuite>',
+        encoding="utf-8",
+    )
+
+    result = _MODULE.classify_pytest_junit(junit)
+
+    assert result == {
+        "passed_count": 0,
+        "skipped_count": 0,
+        "failed_count": 1,
+        "classification": "failed",
+    }
+
+
 def test_discover_single_artifact_directory_requires_exactly_one_child(tmp_path):
     artifact = tmp_path / "generated"
     artifact.mkdir()

@@ -162,8 +162,12 @@ def classify_pytest_junit(junit_xml: Path) -> dict[str, int | str]:
     errors = sum(int(suite.attrib.get("errors", "0")) for suite in suites)
     skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
     failed = failures + errors
+    if tests == 0:
+        failed = 1
     passed = max(tests - failed - skipped, 0)
-    if failed:
+    if tests == 0:
+        classification = "failed"
+    elif failed:
         classification = "failed"
     elif skipped:
         classification = "skipped"

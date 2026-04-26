@@ -1554,6 +1554,156 @@ def test_run_evidence_package_writes_partial_manifest_on_db_failure(tmp_path, mo
     assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
 
 
+def test_run_evidence_package_writes_partial_manifest_on_dirty_paths_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: (_ for _ in ()).throw(RuntimeError("git unavailable")))
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+
+    exit_code = _MODULE.run_evidence_package(
+        ["--output-root", str(tmp_path / "validation"), "--selectors", "ignition"],
+        cwd=Path.cwd(),
+    )
+
+    package_dir = tmp_path / "validation" / "2026-04-25" / "121500-52e5e9b"
+    manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert manifest["overall_status"] == "failed"
+    assert manifest["formal_evidence_gate_passed"] is False
+    assert "git unavailable" in manifest["error"]
+    assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
+
+
+def test_run_evidence_package_preserves_db_smoke_command_when_junit_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])
+    monkeypatch.setattr(_MODULE, "archive_dirty_diff", lambda cwd, package_dir, paths: None)
+    monkeypatch.setattr(
+        _MODULE,
+        "query_latest_market_ts",
+        lambda exchange: datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+
+    def fake_run_command(**kwargs):
+        exit_code = 2 if kwargs["name"] == "db_smoke" else 0
+        return {
+            "name": kwargs["name"],
+            "argv": kwargs["argv"],
+            "started_at": "2026-04-25T10:00:00+00:00",
+            "finished_at": "2026-04-25T10:00:01+00:00",
+            "exit_code": exit_code,
+            "stdout_log": str(tmp_path / f"{kwargs['name']}.stdout.log"),
+            "stderr_log": str(tmp_path / f"{kwargs['name']}.stderr.log"),
+            "junit_xml": str(kwargs.get("junit_xml")) if kwargs.get("junit_xml") else None,
+            "classification": "failed" if exit_code else "passed",
+        }
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        _MODULE,
+        "run_selector_validation",
+        lambda **kwargs: {
+            "selector": kwargs["selector"],
+            "artifact_dir": str(tmp_path / kwargs["selector"]),
+            "artifact_status": "complete",
+            "coverage_status": "trusted",
+            "sample_status": "sample_observed",
+            "selector_evidence_status": "evidence_eligible",
+            "primary_label_complete_count": 10,
+            "signal_count": 10,
+            "incomplete_label_count": 0,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 5.0,
+            "rule_version": "rule-1",
+            "feature_preparation_version": "feature-1",
+            "market_1m_timestamp_semantics": "minute_open_utc",
+            "forward_scan_start_policy": "signal_available_at_inclusive",
+        },
+    )
+
+    exit_code = _MODULE.run_evidence_package(
+        ["--output-root", str(tmp_path / "validation"), "--selectors", "ignition"],
+        cwd=Path.cwd(),
+    )
+
+    package_dir = tmp_path / "validation" / "2026-04-25" / "121500-52e5e9b"
+    manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert manifest["db_smoke"]["classification"] == "failed"
+    assert manifest["db_smoke"]["command"]["exit_code"] == 2
+    assert manifest["db_smoke"]["command"]["argv"][-2:] == ["--junitxml", str(package_dir / "db_smoke" / "junit.xml")]
+    assert manifest["overall_status"] == "failed"
+
+
+def test_run_evidence_package_preserves_selector_failure_command(tmp_path, monkeypatch):
+    selector_command = {
+        "name": "selector_ignition",
+        "argv": ["validator", "--signal-family", "ignition"],
+        "started_at": "2026-04-25T10:00:00+00:00",
+        "finished_at": "2026-04-25T10:00:01+00:00",
+        "exit_code": 1,
+        "stdout_log": str(tmp_path / "selector.stdout.log"),
+        "stderr_log": str(tmp_path / "selector.stderr.log"),
+        "junit_xml": None,
+        "classification": "failed",
+    }
+
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])
+    monkeypatch.setattr(_MODULE, "archive_dirty_diff", lambda cwd, package_dir, paths: None)
+    monkeypatch.setattr(
+        _MODULE,
+        "query_latest_market_ts",
+        lambda exchange: datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        _MODULE,
+        "run_command",
+        lambda **kwargs: {
+            "name": kwargs["name"],
+            "argv": kwargs["argv"],
+            "started_at": "2026-04-25T10:00:00+00:00",
+            "finished_at": "2026-04-25T10:00:01+00:00",
+            "exit_code": 0,
+            "stdout_log": str(tmp_path / f"{kwargs['name']}.stdout.log"),
+            "stderr_log": str(tmp_path / f"{kwargs['name']}.stderr.log"),
+            "junit_xml": str(kwargs.get("junit_xml")) if kwargs.get("junit_xml") else None,
+            "classification": "passed",
+        },
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "classify_pytest_junit",
+        lambda junit: {"passed_count": 1, "skipped_count": 0, "failed_count": 0, "classification": "executed"},
+    )
+
+    def fake_run_selector_validation(**kwargs):
+        raise _MODULE.SelectorValidationError(
+            selector=kwargs["selector"],
+            command=selector_command,
+            reason="validator_failed",
+            message="validator failed for selector=ignition",
+        )
+
+    monkeypatch.setattr(_MODULE, "run_selector_validation", fake_run_selector_validation)
+
+    exit_code = _MODULE.run_evidence_package(
+        ["--output-root", str(tmp_path / "validation"), "--selectors", "ignition"],
+        cwd=Path.cwd(),
+    )
+
+    package_dir = tmp_path / "validation" / "2026-04-25" / "121500-52e5e9b"
+    manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    selector_artifact = manifest["selector_artifacts"]["ignition"]
+    assert exit_code == 1
+    assert selector_artifact["artifact_status"] == "failed"
+    assert selector_artifact["selector_evidence_status"] == "gate_failed"
+    assert selector_artifact["reason"] == "validator_failed"
+    assert selector_artifact["command"]["exit_code"] == 1
+    assert manifest["overall_status"] == "failed"
+
+
 def test_main_delegates_to_run_evidence_package(monkeypatch):
     calls = []
 

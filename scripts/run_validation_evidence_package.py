@@ -1074,10 +1074,6 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
     if package_dir.exists() and args.overwrite:
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True, exist_ok=False)
-    dirty = dirty_paths(cwd=cwd)
-    relevant_dirty = relevant_dirty_paths(dirty)
-    dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
-    dirty_policy = dirty_worktree_policy(relevant_dirty)
     manifest: dict[str, Any] = {
         "package_date": identity["package_date"],
         "run_id": identity["run_id"],
@@ -1086,11 +1082,11 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
         "run_finished_at": None,
         "git_sha": git_sha,
         "git_sha7": identity["git_sha7"],
-        "worktree_dirty": bool(dirty),
-        "dirty_paths": dirty,
-        "relevant_dirty_paths": relevant_dirty,
-        "dirty_diff_path": dirty_diff,
-        "dirty_worktree_policy": dirty_policy,
+        "worktree_dirty": False,
+        "dirty_paths": [],
+        "relevant_dirty_paths": [],
+        "dirty_diff_path": None,
+        "dirty_worktree_policy": "unknown",
         "exchange_universe": [args.exchange],
         "window_days": int(args.window_days),
         "selectors": list(selectors),
@@ -1098,9 +1094,23 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
         "db_smoke": {},
         "selector_artifacts": {},
         "comparison": {},
-        "environment": collect_environment(cwd=cwd),
+        "environment": {},
     }
     try:
+        dirty = dirty_paths(cwd=cwd)
+        relevant_dirty = relevant_dirty_paths(dirty)
+        dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
+        dirty_policy = dirty_worktree_policy(relevant_dirty)
+        manifest.update(
+            {
+                "worktree_dirty": bool(dirty),
+                "dirty_paths": dirty,
+                "relevant_dirty_paths": relevant_dirty,
+                "dirty_diff_path": dirty_diff,
+                "dirty_worktree_policy": dirty_policy,
+                "environment": collect_environment(cwd=cwd),
+            }
+        )
         latest_market_ts = query_latest_market_ts(exchange=args.exchange)
         window = resolve_end_at(
             requested_end_at=args.end_at,
@@ -1142,18 +1152,42 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
             env={"ACTS_RUN_DB_SMOKE": "1"},
             junit_xml=junit_xml,
         )
-        smoke = classify_pytest_junit(junit_xml)
-        smoke["command"] = db_command_record
-        manifest["db_smoke"] = smoke
-        for selector in selectors:
-            manifest["selector_artifacts"][selector] = run_selector_validation(
-                selector=selector,
-                exchange=args.exchange,
-                window_days=int(args.window_days),
-                end_at=str(manifest["resolved_end_at"]),
-                package_dir=package_dir,
-                cwd=cwd,
+        manifest["db_smoke"] = {"command": db_command_record}
+        try:
+            smoke = classify_pytest_junit(junit_xml)
+        except Exception as exc:
+            manifest["db_smoke"].update(
+                {
+                    "passed_count": 0,
+                    "skipped_count": 0,
+                    "failed_count": 1,
+                    "classification": "failed",
+                    "reason": "junit_parse_failed",
+                    "error": str(exc),
+                }
             )
+        else:
+            smoke["command"] = db_command_record
+            manifest["db_smoke"] = smoke
+        for selector in selectors:
+            try:
+                manifest["selector_artifacts"][selector] = run_selector_validation(
+                    selector=selector,
+                    exchange=args.exchange,
+                    window_days=int(args.window_days),
+                    end_at=str(manifest["resolved_end_at"]),
+                    package_dir=package_dir,
+                    cwd=cwd,
+                )
+            except SelectorValidationError as exc:
+                manifest["selector_artifacts"][selector] = {
+                    "selector": exc.selector,
+                    "artifact_status": "failed",
+                    "selector_evidence_status": "gate_failed",
+                    "reason": exc.reason,
+                    "error": str(exc),
+                    "command": exc.command,
+                }
         comparison_root = (
             resolve_path_against_cwd(args.comparison_root, cwd=cwd) if args.comparison_root else None
         )
@@ -1174,8 +1208,8 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
                 comparison=dict(manifest["comparison"]),
                 tests_skipped_by_user=bool(args.skip_tests),
                 end_at_safety_status=str(manifest["end_at_safety_status"]),
-                relevant_dirty_paths=list(relevant_dirty),
-                dirty_diff_path=dirty_diff,
+                relevant_dirty_paths=list(manifest["relevant_dirty_paths"]),
+                dirty_diff_path=manifest["dirty_diff_path"],
             )
         )
         manifest["run_finished_at"] = utc_now().isoformat()

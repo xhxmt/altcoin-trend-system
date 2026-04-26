@@ -227,6 +227,8 @@ def build_comparison_command(
     change_classification: str,
     output_root: Path,
 ) -> list[str]:
+    if (baseline_90d_config is None) != (candidate_90d_config is None):
+        raise ValueError("both 90d comparison configs are required when either is provided")
     command = [
         ".venv/bin/python",
         "scripts/validate_ultra_signal_production.py",
@@ -367,7 +369,22 @@ def _resolve_config_path(config_path: Path, value: str) -> Path:
     return config_path.parent / path
 
 
-def _require_file(config_path: Path, value: str, *, field: str) -> str:
+def _require_non_empty_string(config_path: Path, value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"comparison config {config_path} field {field} must be a non-empty string")
+    return value
+
+
+def _optional_non_empty_string(config_path: Path, config: dict[str, Any], *, field: str, default: str) -> str:
+    if field not in config:
+        value = default
+    else:
+        value = config[field]
+    return _require_non_empty_string(config_path, value, field=field)
+
+
+def _require_file(config_path: Path, value: Any, *, field: str) -> str:
+    value = _require_non_empty_string(config_path, value, field=field)
     resolved = _resolve_config_path(config_path, value)
     if not resolved.is_file():
         raise ValueError(f"comparison config {config_path} field {field} does not exist: {resolved}")
@@ -387,40 +404,52 @@ def normalize_traceable_comparison_config(config_path: Path) -> dict[str, Any]:
     candidate = config.get("candidate")
     if not isinstance(baseline, dict) or not isinstance(candidate, dict):
         raise ValueError(f"comparison config {config_path} requires baseline and candidate objects")
+    selector = validate_selector_name(_require_non_empty_string(config_path, config.get("selector"), field="selector"))
+    comparison_type = _optional_non_empty_string(
+        config_path,
+        config,
+        field="comparison_type",
+        default="threshold_change",
+    )
+    change_id = _optional_non_empty_string(config_path, config, field="change_id", default=config_path.stem)
     normalized = {
         "config_path": str(config_path),
-        "selector": str(config["selector"]),
-        "comparison_type": str(config.get("comparison_type", "threshold_change")),
-        "change_id": str(config.get("change_id", config_path.stem)),
+        "selector": selector,
+        "comparison_type": comparison_type,
+        "change_id": change_id,
         "change_classification": change_classification,
         "baseline": {
             "summary_path": _require_file(
                 config_path,
-                str(baseline.get("summary_path", "")),
+                baseline.get("summary_path"),
                 field="baseline.summary_path",
             ),
             "metadata_path": _require_file(
                 config_path,
-                str(baseline.get("metadata_path", "")),
+                baseline.get("metadata_path"),
                 field="baseline.metadata_path",
             ),
         },
         "candidate": {
             "summary_path": _require_file(
                 config_path,
-                str(candidate.get("summary_path", "")),
+                candidate.get("summary_path"),
                 field="candidate.summary_path",
             ),
             "metadata_path": _require_file(
                 config_path,
-                str(candidate.get("metadata_path", "")),
+                candidate.get("metadata_path"),
                 field="candidate.metadata_path",
             ),
         },
         "ninety_day": None,
     }
     ninety_day = config.get("ninety_day")
-    if isinstance(ninety_day, dict) and bool(ninety_day.get("required", False)):
+    if ninety_day is not None and not isinstance(ninety_day, dict):
+        raise ValueError(f"comparison config {config_path} field ninety_day must be an object")
+    if isinstance(ninety_day, dict) and "required" in ninety_day and not isinstance(ninety_day["required"], bool):
+        raise ValueError(f"comparison config {config_path} field ninety_day.required must be a boolean")
+    if isinstance(ninety_day, dict) and ninety_day.get("required", False):
         baseline_90d = ninety_day.get("baseline")
         candidate_90d = ninety_day.get("candidate")
         if not isinstance(baseline_90d, dict) or not isinstance(candidate_90d, dict):
@@ -430,24 +459,24 @@ def normalize_traceable_comparison_config(config_path: Path) -> dict[str, Any]:
             "baseline": {
                 "summary_path": _require_file(
                     config_path,
-                    str(baseline_90d.get("summary_path", "")),
+                    baseline_90d.get("summary_path"),
                     field="ninety_day.baseline.summary_path",
                 ),
                 "metadata_path": _require_file(
                     config_path,
-                    str(baseline_90d.get("metadata_path", "")),
+                    baseline_90d.get("metadata_path"),
                     field="ninety_day.baseline.metadata_path",
                 ),
             },
             "candidate": {
                 "summary_path": _require_file(
                     config_path,
-                    str(candidate_90d.get("summary_path", "")),
+                    candidate_90d.get("summary_path"),
                     field="ninety_day.candidate.summary_path",
                 ),
                 "metadata_path": _require_file(
                     config_path,
-                    str(candidate_90d.get("metadata_path", "")),
+                    candidate_90d.get("metadata_path"),
                     field="ninety_day.candidate.metadata_path",
                 ),
             },
@@ -458,13 +487,7 @@ def normalize_traceable_comparison_config(config_path: Path) -> dict[str, Any]:
 def load_traceable_comparison_configs(root: Path | None) -> list[dict[str, Any]]:
     if root is None or not root.exists():
         return []
-    configs = []
-    for path in sorted(root.glob("*.json")):
-        try:
-            configs.append(normalize_traceable_comparison_config(path))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return configs
+    return [normalize_traceable_comparison_config(path) for path in sorted(root.glob("*.json"))]
 
 
 def comparison_not_run(reason: str) -> dict[str, str]:

@@ -62,6 +62,42 @@ def _write_selector_artifact(
     (artifact / "README.md").write_text("# run\n", encoding="utf-8")
 
 
+def _write_valid_comparison_config(
+    root: Path,
+    *,
+    config_overrides: dict[str, object] | None = None,
+    baseline_overrides: dict[str, object] | None = None,
+    candidate_overrides: dict[str, object] | None = None,
+) -> Path:
+    artifact_root = root / "artifacts"
+    artifact_root.mkdir()
+    summary = artifact_root / "baseline-summary.json"
+    metadata = artifact_root / "baseline-metadata.json"
+    candidate_summary = artifact_root / "candidate-summary.json"
+    candidate_metadata = artifact_root / "candidate-metadata.json"
+    for path in (summary, metadata, candidate_summary, candidate_metadata):
+        path.write_text("{}", encoding="utf-8")
+    baseline: dict[str, object] = {"summary_path": str(summary), "metadata_path": str(metadata)}
+    candidate: dict[str, object] = {"summary_path": str(candidate_summary), "metadata_path": str(candidate_metadata)}
+    baseline.update(baseline_overrides or {})
+    candidate.update(candidate_overrides or {})
+    config_payload: dict[str, object] = {
+        "schema_version": 1,
+        "selector": "ultra_high_conviction",
+        "comparison_type": "threshold_change",
+        "change_id": "change-1",
+        "baseline": baseline,
+        "candidate": candidate,
+        "change_classification": "non_material",
+        "created_from": "existing_artifacts",
+        "created_at": "2026-04-25T00:00:00+00:00",
+    }
+    config_payload.update(config_overrides or {})
+    config = root / "comparison.json"
+    config.write_text(json.dumps(config_payload), encoding="utf-8")
+    return config
+
+
 def test_default_selectors_include_aggregate_and_grade_views():
     assert _MODULE.DEFAULT_SELECTORS == (
         "continuation",
@@ -211,29 +247,7 @@ def test_build_selector_validator_command_passes_exchange_selector_window_and_te
 
 
 def test_load_traceable_comparison_configs_requires_existing_artifacts(tmp_path):
-    summary = tmp_path / "baseline-summary.json"
-    metadata = tmp_path / "baseline-metadata.json"
-    candidate_summary = tmp_path / "candidate-summary.json"
-    candidate_metadata = tmp_path / "candidate-metadata.json"
-    for path in (summary, metadata, candidate_summary, candidate_metadata):
-        path.write_text("{}", encoding="utf-8")
-    config = tmp_path / "comparison.json"
-    config.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "selector": "ultra_high_conviction",
-                "comparison_type": "threshold_change",
-                "change_id": "change-1",
-                "baseline": {"summary_path": str(summary), "metadata_path": str(metadata)},
-                "candidate": {"summary_path": str(candidate_summary), "metadata_path": str(candidate_metadata)},
-                "change_classification": "non_material",
-                "created_from": "existing_artifacts",
-                "created_at": "2026-04-25T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_valid_comparison_config(tmp_path)
 
     configs = _MODULE.load_traceable_comparison_configs(tmp_path)
 
@@ -243,12 +257,56 @@ def test_load_traceable_comparison_configs_requires_existing_artifacts(tmp_path)
 
 
 def test_load_traceable_comparison_configs_rejects_filename_inference(tmp_path):
-    (tmp_path / "baseline_30d_summary.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "candidate_30d_summary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "baseline_30d_summary.txt").write_text("{}", encoding="utf-8")
+    (tmp_path / "candidate_30d_summary.txt").write_text("{}", encoding="utf-8")
 
     configs = _MODULE.load_traceable_comparison_configs(tmp_path)
 
     assert configs == []
+
+
+def test_load_traceable_comparison_configs_returns_empty_for_missing_root(tmp_path):
+    assert _MODULE.load_traceable_comparison_configs(None) == []
+    assert _MODULE.load_traceable_comparison_configs(tmp_path / "missing") == []
+
+
+def test_load_traceable_comparison_configs_raises_for_explicit_malformed_json(tmp_path):
+    config = tmp_path / "baseline_30d_summary.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires schema_version=1"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_raises_with_missing_artifact_path(tmp_path):
+    _write_valid_comparison_config(
+        tmp_path,
+        baseline_overrides={"summary_path": str(tmp_path / "missing-summary.json")},
+    )
+
+    with pytest.raises(ValueError, match="baseline.summary_path.*does not exist"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_rejects_invalid_selector(tmp_path):
+    _write_valid_comparison_config(tmp_path, config_overrides={"selector": "bad/name"})
+
+    with pytest.raises(ValueError, match="unsafe selector name"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_rejects_non_string_path(tmp_path):
+    _write_valid_comparison_config(tmp_path, baseline_overrides={"summary_path": 123})
+
+    with pytest.raises(ValueError, match="baseline.summary_path.*non-empty string"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_rejects_non_bool_ninety_day_required(tmp_path):
+    _write_valid_comparison_config(tmp_path, config_overrides={"ninety_day": {"required": "true"}})
+
+    with pytest.raises(ValueError, match="ninety_day.required.*boolean"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
 
 
 def test_comparison_summary_for_missing_config_is_not_run():
@@ -277,6 +335,18 @@ def test_build_comparison_command_includes_90d_when_required(tmp_path):
     assert "--compare-90d-candidate-config" in command
     assert "--require-90d" in command
     assert command[-2:] == ["--output-root", str(tmp_path / "out")]
+
+
+def test_build_comparison_command_rejects_partial_90d_config(tmp_path):
+    with pytest.raises(ValueError, match="both 90d comparison configs"):
+        _MODULE.build_comparison_command(
+            baseline_config=tmp_path / "baseline.json",
+            candidate_config=tmp_path / "candidate.json",
+            baseline_90d_config=tmp_path / "baseline-90d.json",
+            candidate_90d_config=None,
+            change_classification="material",
+            output_root=tmp_path / "out",
+        )
 
 
 def test_validate_selector_name_accepts_default_selectors():

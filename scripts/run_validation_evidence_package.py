@@ -4,8 +4,10 @@ import argparse
 import difflib
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,6 +34,7 @@ DEFAULT_SELECTORS = (
     "reacceleration_B",
     "ultra_high_conviction",
 )
+REQUIRED_ARTIFACT_FILES = ("summary.json", "metadata.json", "signals.csv", "README.md")
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,48 @@ def run_command(
         "junit_xml": str(junit_xml) if junit_xml is not None else None,
         "classification": "passed" if int(completed.returncode) == 0 else "failed",
     }
+
+
+def classify_pytest_junit(junit_xml: Path) -> dict[str, int | str]:
+    root = ET.fromstring(junit_xml.read_text(encoding="utf-8"))
+    suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+    tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+    failures = sum(int(suite.attrib.get("failures", "0")) for suite in suites)
+    errors = sum(int(suite.attrib.get("errors", "0")) for suite in suites)
+    skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+    failed = failures + errors
+    passed = max(tests - failed - skipped, 0)
+    if failed:
+        classification = "failed"
+    elif skipped:
+        classification = "skipped"
+    else:
+        classification = "executed"
+    return {
+        "passed_count": passed,
+        "skipped_count": skipped,
+        "failed_count": failed,
+        "classification": classification,
+    }
+
+
+def discover_single_artifact_directory(output_root: Path) -> Path:
+    children = [path for path in output_root.iterdir() if path.is_dir()]
+    if len(children) != 1:
+        raise RuntimeError(f"expected exactly one artifact directory under {output_root}, found {len(children)}")
+    artifact_dir = children[0]
+    missing = [name for name in REQUIRED_ARTIFACT_FILES if not (artifact_dir / name).is_file()]
+    if missing:
+        raise RuntimeError(f"artifact directory missing required files: {missing}")
+    return artifact_dir
+
+
+def place_artifact_directory(*, source: Path, destination: Path) -> Path:
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+    return destination
 
 
 def _is_relevant_dirty_path(path: str) -> bool:

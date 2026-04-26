@@ -155,6 +155,90 @@ def test_run_command_marks_nonzero_as_failed(tmp_path, monkeypatch):
     assert record["classification"] == "failed"
 
 
+def test_classify_pytest_junit_marks_skipped_as_skipped(tmp_path):
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="1"><testcase classname="x" name="y"><skipped /></testcase></testsuite>',
+        encoding="utf-8",
+    )
+
+    result = _MODULE.classify_pytest_junit(junit)
+
+    assert result == {
+        "passed_count": 0,
+        "skipped_count": 1,
+        "failed_count": 0,
+        "classification": "skipped",
+    }
+
+
+def test_classify_pytest_junit_marks_passed_when_no_skip_or_fail(tmp_path):
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase classname="x" name="y" /></testsuite>',
+        encoding="utf-8",
+    )
+
+    result = _MODULE.classify_pytest_junit(junit)
+
+    assert result["passed_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["failed_count"] == 0
+    assert result["classification"] == "executed"
+
+
+def test_classify_pytest_junit_sums_testsuites_root(tmp_path):
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        (
+            '<testsuites>'
+            '<testsuite tests="2" failures="1" errors="0" skipped="0" />'
+            '<testsuite tests="3" failures="0" errors="1" skipped="1" />'
+            "</testsuites>"
+        ),
+        encoding="utf-8",
+    )
+
+    result = _MODULE.classify_pytest_junit(junit)
+
+    assert result == {
+        "passed_count": 2,
+        "skipped_count": 1,
+        "failed_count": 2,
+        "classification": "failed",
+    }
+
+
+def test_discover_single_artifact_directory_requires_exactly_one_child(tmp_path):
+    artifact = tmp_path / "generated"
+    artifact.mkdir()
+    (artifact / "summary.json").write_text("{}", encoding="utf-8")
+    (artifact / "metadata.json").write_text("{}", encoding="utf-8")
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+    (artifact / "README.md").write_text("# run\n", encoding="utf-8")
+
+    assert _MODULE.discover_single_artifact_directory(tmp_path) == artifact
+
+
+def test_discover_single_artifact_directory_fails_for_multiple_children(tmp_path):
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+
+    with pytest.raises(RuntimeError, match="expected exactly one artifact directory"):
+        _MODULE.discover_single_artifact_directory(tmp_path)
+
+
+def test_discover_single_artifact_directory_fails_for_missing_required_file(tmp_path):
+    artifact = tmp_path / "generated"
+    artifact.mkdir()
+    (artifact / "summary.json").write_text("{}", encoding="utf-8")
+    (artifact / "metadata.json").write_text("{}", encoding="utf-8")
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="artifact directory missing required files"):
+        _MODULE.discover_single_artifact_directory(tmp_path)
+
+
 def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
     dirty = [
         "scripts/run_validation_evidence_package.py",

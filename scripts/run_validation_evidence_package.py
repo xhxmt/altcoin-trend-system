@@ -375,14 +375,6 @@ def _require_non_empty_string(config_path: Path, value: Any, *, field: str) -> s
     return value
 
 
-def _optional_non_empty_string(config_path: Path, config: dict[str, Any], *, field: str, default: str) -> str:
-    if field not in config:
-        value = default
-    else:
-        value = config[field]
-    return _require_non_empty_string(config_path, value, field=field)
-
-
 def _require_file(config_path: Path, value: Any, *, field: str) -> str:
     value = _require_non_empty_string(config_path, value, field=field)
     resolved = _resolve_config_path(config_path, value)
@@ -405,13 +397,8 @@ def normalize_traceable_comparison_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(baseline, dict) or not isinstance(candidate, dict):
         raise ValueError(f"comparison config {config_path} requires baseline and candidate objects")
     selector = validate_selector_name(_require_non_empty_string(config_path, config.get("selector"), field="selector"))
-    comparison_type = _optional_non_empty_string(
-        config_path,
-        config,
-        field="comparison_type",
-        default="threshold_change",
-    )
-    change_id = _optional_non_empty_string(config_path, config, field="change_id", default=config_path.stem)
+    comparison_type = _require_non_empty_string(config_path, config.get("comparison_type"), field="comparison_type")
+    change_id = _require_non_empty_string(config_path, config.get("change_id"), field="change_id")
     normalized = {
         "config_path": str(config_path),
         "selector": selector,

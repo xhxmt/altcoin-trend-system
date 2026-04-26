@@ -302,6 +302,37 @@ def test_load_traceable_comparison_configs_rejects_non_string_path(tmp_path):
         _MODULE.load_traceable_comparison_configs(tmp_path)
 
 
+def test_load_traceable_comparison_configs_rejects_missing_comparison_type(tmp_path):
+    config = _write_valid_comparison_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    del payload["comparison_type"]
+    config.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison_type.*non-empty string"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_rejects_missing_change_id(tmp_path):
+    config = _write_valid_comparison_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    del payload["change_id"]
+    config.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="change_id.*non-empty string"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
+def test_load_traceable_comparison_configs_does_not_infer_change_id_from_filename(tmp_path):
+    config = _write_valid_comparison_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    del payload["change_id"]
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    config.rename(tmp_path / "filename-change-id.json")
+
+    with pytest.raises(ValueError, match="change_id.*non-empty string"):
+        _MODULE.load_traceable_comparison_configs(tmp_path)
+
+
 def test_load_traceable_comparison_configs_rejects_non_bool_ninety_day_required(tmp_path):
     _write_valid_comparison_config(tmp_path, config_overrides={"ninety_day": {"required": "true"}})
 

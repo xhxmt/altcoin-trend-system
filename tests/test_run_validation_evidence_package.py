@@ -1213,6 +1213,56 @@ def test_calculate_status_supports_threshold_decision_for_clean_evidence_backed_
     assert status["threshold_decision_status"] == "supported"
 
 
+def test_calculate_status_blocks_evidence_backed_decision_without_selector_artifacts():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={},
+        comparison={"comparison_status": "evidence_backed"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "failed"
+    assert status["threshold_decision_status"] == "no_decision"
+
+
+def test_calculate_status_blocks_evidence_backed_decision_with_archived_dirty_diff():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "evidence_backed"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=["scripts/run_validation_evidence_package.py"],
+        dirty_diff_path="artifacts/package/dirty_diff.patch",
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "passed_with_diagnostics"
+    assert status["threshold_decision_status"] == "no_decision"
+
+    decision = _MODULE.build_evidence_decision(
+        {
+            **status,
+            "comparison": {
+                "comparison_status": "evidence_backed",
+                "change_id": "change-1",
+                "comparison_path": "artifacts/package/comparison.json",
+            },
+            "relevant_dirty_paths": ["scripts/run_validation_evidence_package.py"],
+        }
+    )
+
+    assert decision == "This package is not a formal evidence gate for production threshold decisions."
+
+
 def test_calculate_status_fails_when_db_smoke_is_skipped():
     status = _MODULE.calculate_package_status(
         commands=[{"classification": "passed"}],

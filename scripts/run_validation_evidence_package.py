@@ -874,14 +874,18 @@ def calculate_package_status(
 ) -> dict[str, Any]:
     command_failed = any(command.get("classification") != "passed" for command in commands)
     smoke_failed = db_smoke.get("classification") != "executed"
+    selector_missing = not selector_artifacts
     selector_failed = any(
         item.get("selector_evidence_status") == "gate_failed" for item in selector_artifacts.values()
     )
     unsafe_end = end_at_safety_status != "safe"
-    dirty_blocks_gate = bool(relevant_dirty_paths) and dirty_diff_path is None
+    dirty_present = bool(relevant_dirty_paths)
+    dirty_blocks_gate = dirty_present
+    dirty_diff_missing = dirty_present and dirty_diff_path is None
     gate_failed = (
         command_failed
         or smoke_failed
+        or selector_missing
         or selector_failed
         or tests_skipped_by_user
         or unsafe_end
@@ -890,11 +894,11 @@ def calculate_package_status(
     diagnostic = (
         comparison.get("comparison_status") == "comparison_not_run"
         or any(item.get("selector_evidence_status") == "diagnostic_only" for item in selector_artifacts.values())
-        or bool(relevant_dirty_paths)
+        or dirty_present
         or tests_skipped_by_user
         or unsafe_end
     )
-    if gate_failed and (command_failed or smoke_failed or selector_failed or dirty_blocks_gate):
+    if gate_failed and (command_failed or smoke_failed or selector_missing or selector_failed or dirty_diff_missing):
         overall_status = "failed"
     elif diagnostic:
         overall_status = "passed_with_diagnostics"

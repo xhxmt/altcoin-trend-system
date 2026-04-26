@@ -169,14 +169,32 @@ def run_command(
     merged_env = os.environ.copy()
     if env:
         merged_env.update(dict(env))
-    completed = subprocess.run(
-        argv,
-        cwd=cwd,
-        env=merged_env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            env=merged_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception as exc:
+        finished_at = _iso_now()
+        stdout_log.write_text("", encoding="utf-8")
+        stderr_log.write_text(str(exc), encoding="utf-8")
+        return {
+            "name": name,
+            "argv": list(argv),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "exit_code": -1,
+            "stdout_log": str(stdout_log),
+            "stderr_log": str(stderr_log),
+            "junit_xml": str(junit_xml) if junit_xml is not None else None,
+            "classification": "failed",
+            "reason": "command_launch_failed",
+            "error": str(exc),
+        }
     finished_at = _iso_now()
     stdout_log.write_text(completed.stdout or "", encoding="utf-8")
     stderr_log.write_text(completed.stderr or "", encoding="utf-8")
@@ -1099,18 +1117,18 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
     try:
         dirty = dirty_paths(cwd=cwd)
         relevant_dirty = relevant_dirty_paths(dirty)
-        dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
         dirty_policy = dirty_worktree_policy(relevant_dirty)
         manifest.update(
             {
                 "worktree_dirty": bool(dirty),
                 "dirty_paths": dirty,
                 "relevant_dirty_paths": relevant_dirty,
-                "dirty_diff_path": dirty_diff,
                 "dirty_worktree_policy": dirty_policy,
-                "environment": collect_environment(cwd=cwd),
             }
         )
+        dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
+        manifest["dirty_diff_path"] = dirty_diff
+        manifest["environment"] = collect_environment(cwd=cwd)
         latest_market_ts = query_latest_market_ts(exchange=args.exchange)
         window = resolve_end_at(
             requested_end_at=args.end_at,

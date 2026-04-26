@@ -95,6 +95,12 @@ RELEVANT_DIRTY_PREFIXES = (
 )
 
 
+class DirtyPathList(list[str]):
+    def __init__(self, paths: list[str], *, rename_pairs: list[tuple[str, str]] | None = None) -> None:
+        super().__init__(paths)
+        self.rename_pairs = tuple(rename_pairs or [])
+
+
 def _iso_now() -> str:
     return utc_now().isoformat()
 
@@ -140,8 +146,27 @@ def run_command(
     }
 
 
+def _is_relevant_dirty_path(path: str) -> bool:
+    return path.startswith(RELEVANT_DIRTY_PREFIXES)
+
+
 def relevant_dirty_paths(paths: list[str]) -> list[str]:
-    return [path for path in paths if path.startswith(RELEVANT_DIRTY_PREFIXES)]
+    relevant: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        if path not in seen:
+            relevant.append(path)
+            seen.add(path)
+
+    for path in paths:
+        if _is_relevant_dirty_path(path):
+            add(path)
+    for source, destination in getattr(paths, "rename_pairs", ()):
+        if _is_relevant_dirty_path(source) or _is_relevant_dirty_path(destination):
+            add(source)
+            add(destination)
+    return relevant
 
 
 def dirty_worktree_policy(relevant_paths: list[str]) -> str:
@@ -187,10 +212,11 @@ def current_git_sha(*, cwd: Path) -> str:
     return git_output(["git", "rev-parse", "HEAD"], cwd=cwd, allow_failure=True).strip() or "unknown"
 
 
-def dirty_paths(*, cwd: Path) -> list[str]:
-    output = git_output(["git", "status", "--porcelain=v1", "-z"], cwd=cwd)
+def dirty_paths(*, cwd: Path) -> DirtyPathList:
+    output = git_output(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=cwd)
     entries = [entry for entry in output.split("\0") if entry]
     paths: list[str] = []
+    rename_pairs: list[tuple[str, str]] = []
     index = 0
     while index < len(entries):
         entry = entries[index]
@@ -206,11 +232,12 @@ def dirty_paths(*, cwd: Path) -> list[str]:
                 continue
             source = entries[index + 1]
             paths.extend([source, path])
+            rename_pairs.append((source, path))
             index += 2
             continue
         paths.append(path)
         index += 1
-    return paths
+    return DirtyPathList(paths, rename_pairs=rename_pairs)
 
 
 def _git_diff_output(argv: list[str], *, cwd: Path) -> str | None:

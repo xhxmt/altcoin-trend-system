@@ -236,7 +236,7 @@ def test_dirty_paths_preserves_relevant_source_path_for_rename(monkeypatch):
     paths = _MODULE.dirty_paths(cwd=Path.cwd())
 
     assert paths == ["scripts/foo.py", "README.md"]
-    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo.py"]
+    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo.py", "README.md"]
 
 
 def test_dirty_paths_preserves_relevant_source_path_with_spaces_in_real_repo(tmp_path):
@@ -253,7 +253,47 @@ def test_dirty_paths_preserves_relevant_source_path_with_spaces_in_real_repo(tmp
     paths = _MODULE.dirty_paths(cwd=repo)
 
     assert paths == ["scripts/foo bar.py", "README.md"]
-    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo bar.py"]
+    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo bar.py", "README.md"]
+
+
+def test_dirty_paths_discovers_nested_untracked_files_as_relevant(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _run_git(repo, "add", "README.md")
+    _run_git(repo, "commit", "-m", "initial")
+    plan_path = repo / "docs" / "superpowers" / "plans" / "new-plan.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text("plan\n", encoding="utf-8")
+
+    paths = _MODULE.dirty_paths(cwd=repo)
+
+    assert "docs/superpowers/plans/new-plan.md" in paths
+    assert _MODULE.relevant_dirty_paths(paths) == ["docs/superpowers/plans/new-plan.md"]
+
+
+def test_archive_dirty_diff_replays_relevant_rename_destination(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    script_path = repo / "scripts" / "foo bar.py"
+    script_path.parent.mkdir()
+    script_path.write_text("print('base')\n", encoding="utf-8")
+    _run_git(repo, "add", "scripts/foo bar.py")
+    _run_git(repo, "commit", "-m", "initial")
+
+    _run_git(repo, "mv", "scripts/foo bar.py", "README.md")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    relevant_paths = _MODULE.relevant_dirty_paths(_MODULE.dirty_paths(cwd=repo))
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=relevant_paths)
+    assert result is not None
+    replay = tmp_path / "replay-rename"
+    _run_git(tmp_path, "clone", str(repo), str(replay))
+    _run_git(replay, "apply", str(result))
+
+    assert (replay / "README.md").read_text(encoding="utf-8") == "print('base')\n"
+    assert not (replay / "scripts" / "foo bar.py").exists()
 
 
 def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path):

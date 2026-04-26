@@ -2,6 +2,7 @@
 
 import argparse
 import difflib
+import json
 import os
 import platform
 import shutil
@@ -35,6 +36,20 @@ DEFAULT_SELECTORS = (
     "ultra_high_conviction",
 )
 REQUIRED_ARTIFACT_FILES = ("summary.json", "metadata.json", "signals.csv", "README.md")
+METADATA_REQUIRED_FIELDS = (
+    "coverage_status",
+    "rule_version",
+    "feature_preparation_version",
+    "market_1m_timestamp_semantics",
+    "forward_scan_start_policy",
+)
+SUMMARY_REQUIRED_FIELDS = (
+    "signal_count",
+    "primary_label_complete_count",
+    "incomplete_label_count",
+    "precision_before_dd8",
+    "avg_abs_mae_24h_pct",
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +213,73 @@ def place_artifact_directory(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, destination)
     return destination
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return value
+
+
+def numeric_value(value: Any, *, field: str) -> int | float:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"invalid numeric required field {field}: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"invalid numeric required field {field}: {value!r}")
+        return value
+    raise ValueError(f"invalid numeric required field {field}: {value!r}")
+
+
+def sample_status(primary_label_complete_count: int) -> str:
+    if primary_label_complete_count == 0:
+        return "no_signals"
+    if primary_label_complete_count < 10:
+        return "sample_limited"
+    return "sample_observed"
+
+
+def selector_evidence_status(*, artifact_status: str, coverage_status: str, sample_status_value: str) -> str:
+    if artifact_status != "complete":
+        return "gate_failed"
+    if coverage_status == "trusted" and sample_status_value == "sample_observed":
+        return "evidence_eligible"
+    return "diagnostic_only"
+
+
+def extract_selector_artifact(*, selector: str, artifact_dir: Path) -> dict[str, Any]:
+    missing_files = [name for name in REQUIRED_ARTIFACT_FILES if not (artifact_dir / name).is_file()]
+    if missing_files:
+        raise ValueError(f"selector {selector} missing required artifact files: {missing_files}")
+    metadata = read_json_object(artifact_dir / "metadata.json")
+    summary = read_json_object(artifact_dir / "summary.json")
+    extracted: dict[str, Any] = {
+        "selector": selector,
+        "artifact_dir": str(artifact_dir),
+        "artifact_status": "complete",
+        "field_conflicts": [],
+    }
+    for field in METADATA_REQUIRED_FIELDS:
+        if field not in metadata:
+            raise ValueError(f"missing required selector field {field} in metadata.json for {selector}")
+        extracted[field] = metadata[field]
+    for field in SUMMARY_REQUIRED_FIELDS:
+        if field not in summary:
+            raise ValueError(f"missing required selector field {field} in summary.json for {selector}")
+        extracted[field] = numeric_value(summary[field], field=field)
+        if field in metadata and metadata[field] != summary[field]:
+            extracted["field_conflicts"].append(field)
+    primary_count = int(extracted["primary_label_complete_count"])
+    extracted["sample_status"] = sample_status(primary_count)
+    extracted["selector_evidence_status"] = selector_evidence_status(
+        artifact_status=str(extracted["artifact_status"]),
+        coverage_status=str(extracted["coverage_status"]),
+        sample_status_value=str(extracted["sample_status"]),
+    )
+    return extracted
 
 
 def _is_relevant_dirty_path(path: str) -> bool:

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -273,6 +274,94 @@ def test_place_artifact_directory_accepts_positional_args_and_replaces_destinati
     assert not (destination / "stale.txt").exists()
     assert (destination / "summary.json").read_text(encoding="utf-8") == '{"source": true}\n'
     assert (destination / "nested" / "artifact.txt").read_text(encoding="utf-8") == "copied\n"
+
+
+def test_extract_selector_artifact_reads_canonical_fields(tmp_path):
+    artifact = tmp_path / "selector"
+    artifact.mkdir()
+    (artifact / "metadata.json").write_text(
+        json.dumps(
+            {
+                "coverage_status": "trusted",
+                "rule_version": "rule-1",
+                "feature_preparation_version": "feature-1",
+                "market_1m_timestamp_semantics": "minute_open_utc",
+                "forward_scan_start_policy": "signal_available_at_inclusive",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact / "summary.json").write_text(
+        json.dumps(
+            {
+                "signal_count": 12,
+                "primary_label_complete_count": 10,
+                "incomplete_label_count": 2,
+                "precision_before_dd8": 0.5,
+                "avg_abs_mae_24h_pct": 6.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+    (artifact / "README.md").write_text("# run\n", encoding="utf-8")
+
+    extracted = _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
+
+    assert extracted["artifact_status"] == "complete"
+    assert extracted["coverage_status"] == "trusted"
+    assert extracted["sample_status"] == "sample_observed"
+    assert extracted["selector_evidence_status"] == "evidence_eligible"
+    assert extracted["primary_label_complete_count"] == 10
+    assert extracted["precision_before_dd8"] == 0.5
+
+
+def test_extract_selector_artifact_marks_sample_limited(tmp_path):
+    artifact = tmp_path / "selector"
+    artifact.mkdir()
+    (artifact / "metadata.json").write_text(
+        json.dumps(
+            {
+                "coverage_status": "trusted",
+                "rule_version": "rule-1",
+                "feature_preparation_version": "feature-1",
+                "market_1m_timestamp_semantics": "minute_open_utc",
+                "forward_scan_start_policy": "signal_available_at_inclusive",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact / "summary.json").write_text(
+        json.dumps(
+            {
+                "signal_count": 3,
+                "primary_label_complete_count": 3,
+                "incomplete_label_count": 0,
+                "precision_before_dd8": 0.0,
+                "avg_abs_mae_24h_pct": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+    (artifact / "README.md").write_text("# run\n", encoding="utf-8")
+
+    extracted = _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
+
+    assert extracted["sample_status"] == "sample_limited"
+    assert extracted["selector_evidence_status"] == "diagnostic_only"
+
+
+def test_extract_selector_artifact_fails_for_missing_required_field(tmp_path):
+    artifact = tmp_path / "selector"
+    artifact.mkdir()
+    (artifact / "metadata.json").write_text("{}", encoding="utf-8")
+    (artifact / "summary.json").write_text("{}", encoding="utf-8")
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+    (artifact / "README.md").write_text("# run\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required selector field"):
+        _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
 
 
 def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():

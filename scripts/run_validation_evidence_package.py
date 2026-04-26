@@ -1051,6 +1051,13 @@ def db_smoke_command(junit_xml: Path) -> list[str]:
     ]
 
 
+def resolve_path_against_cwd(path: str | Path, *, cwd: Path) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    return cwd / candidate
+
+
 def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     cwd = cwd or Path.cwd()
     args = parse_args(argv)
@@ -1059,7 +1066,7 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
     now = utc_now()
     identity = build_run_identity(now=now, git_sha=git_sha)
     package_dir = resolve_package_dir(
-        output_root=Path(args.output_root),
+        output_root=resolve_path_against_cwd(args.output_root, cwd=cwd),
         package_date=identity["package_date"],
         run_id=identity["run_id"],
         overwrite=bool(args.overwrite),
@@ -1147,7 +1154,9 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
                 package_dir=package_dir,
                 cwd=cwd,
             )
-        comparison_root = Path(args.comparison_root) if args.comparison_root else None
+        comparison_root = (
+            resolve_path_against_cwd(args.comparison_root, cwd=cwd) if args.comparison_root else None
+        )
         configs = load_traceable_comparison_configs(comparison_root)
         if not configs:
             manifest["comparison"] = comparison_not_run("missing_traceable_baseline_candidate_config")

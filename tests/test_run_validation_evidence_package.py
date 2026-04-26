@@ -1445,6 +1445,90 @@ def test_run_evidence_package_writes_manifest_and_readme(tmp_path, monkeypatch):
     assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
 
 
+def test_run_evidence_package_resolves_relative_paths_against_supplied_cwd(tmp_path, monkeypatch):
+    caller_cwd = tmp_path / "caller"
+    temp_repo = tmp_path / "repo"
+    caller_cwd.mkdir()
+    temp_repo.mkdir()
+    received_comparison_roots = []
+
+    monkeypatch.chdir(caller_cwd)
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])
+    monkeypatch.setattr(_MODULE, "archive_dirty_diff", lambda cwd, package_dir, paths: None)
+    monkeypatch.setattr(
+        _MODULE,
+        "query_latest_market_ts",
+        lambda exchange: datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        _MODULE,
+        "run_command",
+        lambda **kwargs: {
+            "name": kwargs["name"],
+            "argv": kwargs["argv"],
+            "started_at": "2026-04-25T10:00:00+00:00",
+            "finished_at": "2026-04-25T10:00:01+00:00",
+            "exit_code": 0,
+            "stdout_log": str(tmp_path / f"{kwargs['name']}.stdout.log"),
+            "stderr_log": str(tmp_path / f"{kwargs['name']}.stderr.log"),
+            "junit_xml": str(kwargs.get("junit_xml")) if kwargs.get("junit_xml") else None,
+            "classification": "passed",
+        },
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "classify_pytest_junit",
+        lambda junit: {"passed_count": 1, "skipped_count": 0, "failed_count": 0, "classification": "executed"},
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "run_selector_validation",
+        lambda **kwargs: {
+            "selector": kwargs["selector"],
+            "artifact_dir": str(tmp_path / kwargs["selector"]),
+            "artifact_status": "complete",
+            "coverage_status": "trusted",
+            "sample_status": "sample_observed",
+            "selector_evidence_status": "evidence_eligible",
+            "primary_label_complete_count": 10,
+            "signal_count": 10,
+            "incomplete_label_count": 0,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 5.0,
+            "rule_version": "rule-1",
+            "feature_preparation_version": "feature-1",
+            "market_1m_timestamp_semantics": "minute_open_utc",
+            "forward_scan_start_policy": "signal_available_at_inclusive",
+        },
+    )
+
+    def fake_load_traceable_comparison_configs(root):
+        received_comparison_roots.append(root)
+        return []
+
+    monkeypatch.setattr(_MODULE, "load_traceable_comparison_configs", fake_load_traceable_comparison_configs)
+
+    exit_code = _MODULE.run_evidence_package(
+        [
+            "--output-root",
+            "validation",
+            "--comparison-root",
+            "configs",
+            "--selectors",
+            "ignition",
+        ],
+        cwd=temp_repo,
+    )
+
+    package_dir = temp_repo / "validation" / "2026-04-25" / "121500-52e5e9b"
+    assert exit_code == 0
+    assert (package_dir / "run_manifest.json").is_file()
+    assert not (caller_cwd / "validation").exists()
+    assert received_comparison_roots == [temp_repo / "configs"]
+
+
 def test_run_evidence_package_writes_partial_manifest_on_db_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
     monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])

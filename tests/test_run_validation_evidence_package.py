@@ -210,6 +210,75 @@ def test_build_selector_validator_command_passes_exchange_selector_window_and_te
     ]
 
 
+def test_load_traceable_comparison_configs_requires_existing_artifacts(tmp_path):
+    summary = tmp_path / "baseline-summary.json"
+    metadata = tmp_path / "baseline-metadata.json"
+    candidate_summary = tmp_path / "candidate-summary.json"
+    candidate_metadata = tmp_path / "candidate-metadata.json"
+    for path in (summary, metadata, candidate_summary, candidate_metadata):
+        path.write_text("{}", encoding="utf-8")
+    config = tmp_path / "comparison.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selector": "ultra_high_conviction",
+                "comparison_type": "threshold_change",
+                "change_id": "change-1",
+                "baseline": {"summary_path": str(summary), "metadata_path": str(metadata)},
+                "candidate": {"summary_path": str(candidate_summary), "metadata_path": str(candidate_metadata)},
+                "change_classification": "non_material",
+                "created_from": "existing_artifacts",
+                "created_at": "2026-04-25T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    configs = _MODULE.load_traceable_comparison_configs(tmp_path)
+
+    assert len(configs) == 1
+    assert configs[0]["selector"] == "ultra_high_conviction"
+    assert configs[0]["change_id"] == "change-1"
+
+
+def test_load_traceable_comparison_configs_rejects_filename_inference(tmp_path):
+    (tmp_path / "baseline_30d_summary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "candidate_30d_summary.json").write_text("{}", encoding="utf-8")
+
+    configs = _MODULE.load_traceable_comparison_configs(tmp_path)
+
+    assert configs == []
+
+
+def test_comparison_summary_for_missing_config_is_not_run():
+    summary = _MODULE.comparison_not_run("missing_traceable_baseline_candidate_config")
+
+    assert summary == {
+        "comparison_status": "comparison_not_run",
+        "reason": "missing_traceable_baseline_candidate_config",
+        "threshold_decision_status": "no_decision",
+    }
+
+
+def test_build_comparison_command_includes_90d_when_required(tmp_path):
+    command = _MODULE.build_comparison_command(
+        baseline_config=tmp_path / "baseline.json",
+        candidate_config=tmp_path / "candidate.json",
+        baseline_90d_config=tmp_path / "baseline-90d.json",
+        candidate_90d_config=tmp_path / "candidate-90d.json",
+        change_classification="material",
+        output_root=tmp_path / "out",
+    )
+
+    assert "--compare-baseline-config" in command
+    assert "--compare-candidate-config" in command
+    assert "--compare-90d-baseline-config" in command
+    assert "--compare-90d-candidate-config" in command
+    assert "--require-90d" in command
+    assert command[-2:] == ["--output-root", str(tmp_path / "out")]
+
+
 def test_validate_selector_name_accepts_default_selectors():
     assert [_MODULE.validate_selector_name(selector) for selector in _MODULE.DEFAULT_SELECTORS] == list(
         _MODULE.DEFAULT_SELECTORS

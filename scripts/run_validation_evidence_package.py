@@ -218,6 +218,39 @@ def build_selector_validator_command(
     ]
 
 
+def build_comparison_command(
+    *,
+    baseline_config: Path,
+    candidate_config: Path,
+    baseline_90d_config: Path | None,
+    candidate_90d_config: Path | None,
+    change_classification: str,
+    output_root: Path,
+) -> list[str]:
+    command = [
+        ".venv/bin/python",
+        "scripts/validate_ultra_signal_production.py",
+        "--compare-baseline-config",
+        str(baseline_config),
+        "--compare-candidate-config",
+        str(candidate_config),
+        "--change-classification",
+        change_classification,
+    ]
+    if baseline_90d_config is not None and candidate_90d_config is not None:
+        command.extend(
+            [
+                "--compare-90d-baseline-config",
+                str(baseline_90d_config),
+                "--compare-90d-candidate-config",
+                str(candidate_90d_config),
+                "--require-90d",
+            ]
+        )
+    command.extend(["--output-root", str(output_root)])
+    return command
+
+
 def validate_selector_name(selector: str) -> str:
     if not SAFE_SELECTOR_NAME_RE.fullmatch(selector):
         raise ValueError(f"unsafe selector name: {selector!r}")
@@ -325,6 +358,121 @@ def read_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"expected JSON object: {path}")
     return value
+
+
+def _resolve_config_path(config_path: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return config_path.parent / path
+
+
+def _require_file(config_path: Path, value: str, *, field: str) -> str:
+    resolved = _resolve_config_path(config_path, value)
+    if not resolved.is_file():
+        raise ValueError(f"comparison config {config_path} field {field} does not exist: {resolved}")
+    return str(resolved)
+
+
+def normalize_traceable_comparison_config(config_path: Path) -> dict[str, Any]:
+    config = read_json_object(config_path)
+    if config.get("schema_version") != 1:
+        raise ValueError(f"comparison config {config_path} requires schema_version=1")
+    if config.get("created_from") != "existing_artifacts":
+        raise ValueError(f"comparison config {config_path} must use created_from=existing_artifacts")
+    change_classification = config.get("change_classification")
+    if change_classification not in {"material", "non_material"}:
+        raise ValueError(f"comparison config {config_path} has invalid change_classification")
+    baseline = config.get("baseline")
+    candidate = config.get("candidate")
+    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
+        raise ValueError(f"comparison config {config_path} requires baseline and candidate objects")
+    normalized = {
+        "config_path": str(config_path),
+        "selector": str(config["selector"]),
+        "comparison_type": str(config.get("comparison_type", "threshold_change")),
+        "change_id": str(config.get("change_id", config_path.stem)),
+        "change_classification": change_classification,
+        "baseline": {
+            "summary_path": _require_file(
+                config_path,
+                str(baseline.get("summary_path", "")),
+                field="baseline.summary_path",
+            ),
+            "metadata_path": _require_file(
+                config_path,
+                str(baseline.get("metadata_path", "")),
+                field="baseline.metadata_path",
+            ),
+        },
+        "candidate": {
+            "summary_path": _require_file(
+                config_path,
+                str(candidate.get("summary_path", "")),
+                field="candidate.summary_path",
+            ),
+            "metadata_path": _require_file(
+                config_path,
+                str(candidate.get("metadata_path", "")),
+                field="candidate.metadata_path",
+            ),
+        },
+        "ninety_day": None,
+    }
+    ninety_day = config.get("ninety_day")
+    if isinstance(ninety_day, dict) and bool(ninety_day.get("required", False)):
+        baseline_90d = ninety_day.get("baseline")
+        candidate_90d = ninety_day.get("candidate")
+        if not isinstance(baseline_90d, dict) or not isinstance(candidate_90d, dict):
+            raise ValueError(f"comparison config {config_path} requires ninety_day baseline and candidate objects")
+        normalized["ninety_day"] = {
+            "required": True,
+            "baseline": {
+                "summary_path": _require_file(
+                    config_path,
+                    str(baseline_90d.get("summary_path", "")),
+                    field="ninety_day.baseline.summary_path",
+                ),
+                "metadata_path": _require_file(
+                    config_path,
+                    str(baseline_90d.get("metadata_path", "")),
+                    field="ninety_day.baseline.metadata_path",
+                ),
+            },
+            "candidate": {
+                "summary_path": _require_file(
+                    config_path,
+                    str(candidate_90d.get("summary_path", "")),
+                    field="ninety_day.candidate.summary_path",
+                ),
+                "metadata_path": _require_file(
+                    config_path,
+                    str(candidate_90d.get("metadata_path", "")),
+                    field="ninety_day.candidate.metadata_path",
+                ),
+            },
+        }
+    return normalized
+
+
+def load_traceable_comparison_configs(root: Path | None) -> list[dict[str, Any]]:
+    if root is None or not root.exists():
+        return []
+    configs = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            configs.append(normalize_traceable_comparison_config(path))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return configs
+
+
+def comparison_not_run(reason: str) -> dict[str, str]:
+    return {
+        "comparison_status": "comparison_not_run",
+        "reason": reason,
+        "threshold_decision_status": "no_decision",
+    }
 
 
 def numeric_value(value: Any, *, field: str) -> int | float:

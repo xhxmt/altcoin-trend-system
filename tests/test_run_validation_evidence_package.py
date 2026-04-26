@@ -1,5 +1,4 @@
 import importlib.util
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +10,26 @@ _SPEC = importlib.util.spec_from_file_location("run_validation_evidence_package"
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
+
+
+def _run_git(cwd: Path, *args: str) -> str:
+    completed = _MODULE.subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def _init_git_repo(path: Path) -> None:
+    path.mkdir()
+    _run_git(path, "init")
+    _run_git(path, "config", "user.email", "test@example.com")
+    _run_git(path, "config", "user.name", "Test User")
+    _run_git(path, "config", "commit.gpgsign", "false")
 
 
 def test_default_selectors_include_aggregate_and_grade_views():
@@ -158,6 +177,101 @@ def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
 def test_dirty_worktree_policy_disables_threshold_claims_for_relevant_paths():
     assert _MODULE.dirty_worktree_policy([]) == "clean"
     assert _MODULE.dirty_worktree_policy(["scripts/run_validation_evidence_package.py"]) == "threshold_claims_disabled"
+
+
+def test_git_output_raises_by_default_and_allows_explicit_failure(monkeypatch):
+    class FakeCompleted:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: not a git repository\n"
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    with pytest.raises(RuntimeError, match="git command failed"):
+        _MODULE.git_output(["git", "status", "--short"], cwd=Path.cwd())
+
+    assert _MODULE.git_output(["git", "status", "--short"], cwd=Path.cwd(), allow_failure=True) == ""
+
+
+def test_dirty_paths_raises_when_git_status_fails(monkeypatch):
+    class FakeCompleted:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: not a git repository\n"
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    with pytest.raises(RuntimeError, match="git command failed"):
+        _MODULE.dirty_paths(cwd=Path.cwd())
+
+
+def test_dirty_paths_parses_normal_rename_and_untracked_paths(monkeypatch):
+    class FakeCompleted:
+        returncode = 0
+        stdout = (
+            " M scripts/run_validation_evidence_package.py\n"
+            "R  docs/old-plan.md -> docs/superpowers/plans/new-plan.md\n"
+            "?? tests/test_new_validation.py\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    assert _MODULE.dirty_paths(cwd=Path.cwd()) == [
+        "scripts/run_validation_evidence_package.py",
+        "docs/superpowers/plans/new-plan.md",
+        "tests/test_new_validation.py",
+    ]
+
+
+def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    (repo / "staged.txt").write_text("base staged\n", encoding="utf-8")
+    (repo / "unstaged.txt").write_text("base unstaged\n", encoding="utf-8")
+    _run_git(repo, "add", "staged.txt", "unstaged.txt")
+    _run_git(repo, "commit", "-m", "initial")
+
+    (repo / "staged.txt").write_text("staged change\n", encoding="utf-8")
+    _run_git(repo, "add", "staged.txt")
+    (repo / "unstaged.txt").write_text("unstaged change\n", encoding="utf-8")
+    untracked_path = repo / "docs" / "superpowers" / "plans" / "2026-04-25-validation-evidence-package.md"
+    untracked_path.parent.mkdir(parents=True)
+    untracked_path.write_text("plan text\n", encoding="utf-8")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    result = _MODULE.archive_dirty_diff(
+        cwd=repo,
+        package_dir=package_dir,
+        paths=[
+            "staged.txt",
+            "unstaged.txt",
+            "docs/superpowers/plans/2026-04-25-validation-evidence-package.md",
+        ],
+    )
+
+    assert result is not None
+    patch_text = Path(result).read_text(encoding="utf-8")
+    assert "+staged change\n" in patch_text
+    assert "+unstaged change\n" in patch_text
+    assert "# Untracked file: docs/superpowers/plans/2026-04-25-validation-evidence-package.md" in patch_text
+    assert "+plan text\n" in patch_text
+
+
+def test_archive_dirty_diff_returns_none_for_empty_archive(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    _run_git(repo, "add", "tracked.txt")
+    _run_git(repo, "commit", "-m", "initial")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=["tracked.txt"])
+
+    assert result is None
+    assert not (package_dir / "dirty_diff.patch").exists()
 
 
 def test_collect_environment_contains_required_keys(monkeypatch):

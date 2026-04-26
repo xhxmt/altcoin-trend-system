@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
+import difflib
 import os
 import platform
 import subprocess
@@ -164,7 +164,7 @@ def collect_environment(*, cwd: Path) -> dict[str, str]:
     return environment
 
 
-def git_output(argv: list[str], *, cwd: Path) -> str:
+def git_output(argv: list[str], *, cwd: Path, allow_failure: bool = False) -> str:
     completed = subprocess.run(
         argv,
         cwd=cwd,
@@ -173,12 +173,18 @@ def git_output(argv: list[str], *, cwd: Path) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        return ""
-    return completed.stdout.strip()
+        if allow_failure:
+            return ""
+        detail = (completed.stderr or completed.stdout or "").strip()
+        message = f"git command failed ({' '.join(argv)})"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message)
+    return completed.stdout.rstrip("\n")
 
 
 def current_git_sha(*, cwd: Path) -> str:
-    return git_output(["git", "rev-parse", "HEAD"], cwd=cwd) or "unknown"
+    return git_output(["git", "rev-parse", "HEAD"], cwd=cwd, allow_failure=True).strip() or "unknown"
 
 
 def dirty_paths(*, cwd: Path) -> list[str]:
@@ -194,11 +200,9 @@ def dirty_paths(*, cwd: Path) -> list[str]:
     return paths
 
 
-def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str | None:
-    if not paths:
-        return None
+def _git_diff_output(argv: list[str], *, cwd: Path) -> str | None:
     completed = subprocess.run(
-        ["git", "diff", "--", *paths],
+        argv,
         cwd=cwd,
         text=True,
         capture_output=True,
@@ -206,8 +210,61 @@ def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str
     )
     if completed.returncode != 0:
         return None
+    return completed.stdout
+
+
+def _untracked_paths(*, cwd: Path, paths: list[str]) -> list[str] | None:
+    completed = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "--", *paths],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return sorted(path for path in completed.stdout.splitlines() if path.strip())
+
+
+def _archive_untracked_path(*, cwd: Path, path: str) -> str:
+    file_path = cwd / path
+    header = f"# Untracked file: {path}\n"
+    if not file_path.is_file():
+        return f"{header}# content unavailable: not a regular file\n"
+    try:
+        content = file_path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return f"{header}# content unavailable: binary or non-UTF-8 data\n"
+    except OSError as exc:
+        return f"{header}# content unavailable: {exc.__class__.__name__}: {exc}\n"
+    if content == "":
+        return f"{header}# content: empty text file\n"
+    return header + "".join(
+        difflib.unified_diff(
+            [],
+            content.splitlines(keepends=True),
+            fromfile="/dev/null",
+            tofile=f"b/{path}",
+        )
+    )
+
+
+def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str | None:
+    if not paths:
+        return None
+    unstaged_diff = _git_diff_output(["git", "diff", "--", *paths], cwd=cwd)
+    staged_diff = _git_diff_output(["git", "diff", "--cached", "--", *paths], cwd=cwd)
+    untracked = _untracked_paths(cwd=cwd, paths=paths)
+    if unstaged_diff is None or staged_diff is None or untracked is None:
+        return None
+    chunks = [chunk.rstrip("\n") for chunk in (unstaged_diff, staged_diff) if chunk.strip()]
+    chunks.extend(_archive_untracked_path(cwd=cwd, path=path).rstrip("\n") for path in untracked)
+    archive_text = "\n\n".join(chunk for chunk in chunks if chunk.strip())
+    if not archive_text:
+        return None
+    package_dir.mkdir(parents=True, exist_ok=True)
     diff_path = package_dir / "dirty_diff.patch"
-    diff_path.write_text(completed.stdout, encoding="utf-8")
+    diff_path.write_text(f"{archive_text}\n", encoding="utf-8")
     return str(diff_path)
 
 

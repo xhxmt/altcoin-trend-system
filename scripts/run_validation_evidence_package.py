@@ -1012,10 +1012,181 @@ def build_evidence_readme(manifest: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
+def write_manifest(package_dir: Path, manifest: dict[str, Any]) -> None:
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def targeted_test_command() -> list[str]:
+    return [
+        ".venv/bin/pytest",
+        "tests/test_validate_signal_semantics.py",
+        "tests/test_validate_ultra_signal_production.py",
+        "-q",
+    ]
+
+
+def impacted_test_command() -> list[str]:
+    return [
+        ".venv/bin/pytest",
+        "tests/test_trade_backtest.py",
+        "tests/test_signal_v2.py",
+        "tests/test_validate_signal_semantics.py",
+        "tests/test_validate_ultra_signal_production.py",
+        "-q",
+    ]
+
+
+def db_smoke_command(junit_xml: Path) -> list[str]:
+    return [
+        ".venv/bin/pytest",
+        "tests/test_validate_signal_db_smoke.py",
+        "-q",
+        "-rs",
+        "--junitxml",
+        str(junit_xml),
+    ]
+
+
+def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
+    cwd = cwd or Path.cwd()
     args = parse_args(argv)
-    parse_selector_list(args.selectors)
-    return 0
+    selectors = parse_selector_list(args.selectors)
+    git_sha = current_git_sha(cwd=cwd)
+    now = utc_now()
+    identity = build_run_identity(now=now, git_sha=git_sha)
+    package_dir = resolve_package_dir(
+        output_root=Path(args.output_root),
+        package_date=identity["package_date"],
+        run_id=identity["run_id"],
+        overwrite=bool(args.overwrite),
+    )
+    if package_dir.exists() and args.overwrite:
+        shutil.rmtree(package_dir)
+    package_dir.mkdir(parents=True, exist_ok=False)
+    dirty = dirty_paths(cwd=cwd)
+    relevant_dirty = relevant_dirty_paths(dirty)
+    dirty_diff = archive_dirty_diff(cwd=cwd, package_dir=package_dir, paths=relevant_dirty)
+    dirty_policy = dirty_worktree_policy(relevant_dirty)
+    manifest: dict[str, Any] = {
+        "package_date": identity["package_date"],
+        "run_id": identity["run_id"],
+        "package_dir": str(package_dir),
+        "run_started_at": now.isoformat(),
+        "run_finished_at": None,
+        "git_sha": git_sha,
+        "git_sha7": identity["git_sha7"],
+        "worktree_dirty": bool(dirty),
+        "dirty_paths": dirty,
+        "relevant_dirty_paths": relevant_dirty,
+        "dirty_diff_path": dirty_diff,
+        "dirty_worktree_policy": dirty_policy,
+        "exchange_universe": [args.exchange],
+        "window_days": int(args.window_days),
+        "selectors": list(selectors),
+        "commands": [],
+        "db_smoke": {},
+        "selector_artifacts": {},
+        "comparison": {},
+        "environment": collect_environment(cwd=cwd),
+    }
+    try:
+        latest_market_ts = query_latest_market_ts(exchange=args.exchange)
+        window = resolve_end_at(
+            requested_end_at=args.end_at,
+            latest_market_ts=latest_market_ts,
+            now=now,
+            allow_unsafe=bool(args.allow_unsafe_end_at),
+        )
+        manifest.update(window)
+        manifest["latest_market_1m_ts"] = latest_market_ts.isoformat()
+        if not args.skip_tests:
+            manifest["commands"].append(
+                run_command(
+                    name="targeted_tests",
+                    argv=targeted_test_command(),
+                    package_dir=package_dir,
+                    log_dir=package_dir / "test_logs",
+                    cwd=cwd,
+                    env=None,
+                )
+            )
+            manifest["commands"].append(
+                run_command(
+                    name="impacted_tests",
+                    argv=impacted_test_command(),
+                    package_dir=package_dir,
+                    log_dir=package_dir / "test_logs",
+                    cwd=cwd,
+                    env=None,
+                )
+            )
+        junit_xml = package_dir / "db_smoke" / "junit.xml"
+        junit_xml.parent.mkdir(parents=True, exist_ok=True)
+        db_command_record = run_command(
+            name="db_smoke",
+            argv=db_smoke_command(junit_xml),
+            package_dir=package_dir,
+            log_dir=package_dir / "db_smoke",
+            cwd=cwd,
+            env={"ACTS_RUN_DB_SMOKE": "1"},
+            junit_xml=junit_xml,
+        )
+        smoke = classify_pytest_junit(junit_xml)
+        smoke["command"] = db_command_record
+        manifest["db_smoke"] = smoke
+        for selector in selectors:
+            manifest["selector_artifacts"][selector] = run_selector_validation(
+                selector=selector,
+                exchange=args.exchange,
+                window_days=int(args.window_days),
+                end_at=str(manifest["resolved_end_at"]),
+                package_dir=package_dir,
+                cwd=cwd,
+            )
+        comparison_root = Path(args.comparison_root) if args.comparison_root else None
+        configs = load_traceable_comparison_configs(comparison_root)
+        if not configs:
+            manifest["comparison"] = comparison_not_run("missing_traceable_baseline_candidate_config")
+        else:
+            manifest["comparison"] = {
+                "comparison_status": "insufficient",
+                "reason": "comparison_config_present_before_comparison_support",
+                "threshold_decision_status": "no_decision",
+            }
+        manifest.update(
+            calculate_package_status(
+                commands=list(manifest["commands"]),
+                db_smoke=dict(manifest["db_smoke"]),
+                selector_artifacts=dict(manifest["selector_artifacts"]),
+                comparison=dict(manifest["comparison"]),
+                tests_skipped_by_user=bool(args.skip_tests),
+                end_at_safety_status=str(manifest["end_at_safety_status"]),
+                relevant_dirty_paths=list(relevant_dirty),
+                dirty_diff_path=dirty_diff,
+            )
+        )
+        manifest["run_finished_at"] = utc_now().isoformat()
+        write_manifest(package_dir, manifest)
+        (package_dir / "EVIDENCE_PACKAGE.md").write_text(build_evidence_readme(manifest), encoding="utf-8")
+        return 0 if manifest["overall_status"] != "failed" else 1
+    except Exception as exc:
+        manifest["error"] = str(exc)
+        manifest["gate_status"] = "failed"
+        manifest["formal_evidence_gate_passed"] = False
+        manifest["threshold_decision_status"] = "no_decision"
+        manifest["overall_status"] = "failed"
+        manifest["run_finished_at"] = utc_now().isoformat()
+        write_manifest(package_dir, manifest)
+        (package_dir / "EVIDENCE_PACKAGE.md").write_text(build_evidence_readme(manifest), encoding="utf-8")
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run_evidence_package(argv, cwd=Path.cwd())
 
 
 if __name__ == "__main__":

@@ -8,9 +8,14 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from sqlalchemy import text
+
+from altcoin_trend.config import load_settings
+from altcoin_trend.db import build_engine
 
 
 DEFAULT_OUTPUT_ROOT = "artifacts/autoresearch/validation"
@@ -187,6 +192,75 @@ def collect_environment(*, cwd: Path) -> dict[str, str]:
         else:
             environment[f"{module_name}_version"] = str(getattr(module, "__version__", "unknown"))
     return environment
+
+
+def parse_iso_datetime(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def floor_hour(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value_utc = value.astimezone(timezone.utc)
+    return value_utc.replace(minute=0, second=0, microsecond=0)
+
+
+def resolve_end_at(
+    *,
+    requested_end_at: str | None,
+    latest_market_ts: datetime,
+    now: datetime,
+    allow_unsafe: bool,
+) -> dict[str, str | None]:
+    scoped_market_safe_end_at = floor_hour(latest_market_ts) - timedelta(hours=24)
+    wall_clock_safe_end_at = floor_hour(now) - timedelta(hours=24)
+    safe_end_at = min(scoped_market_safe_end_at, wall_clock_safe_end_at)
+    if requested_end_at is None:
+        resolved_end_at = safe_end_at
+        return {
+            "requested_end_at": None,
+            "resolved_end_at": resolved_end_at.isoformat(),
+            "safe_end_at": safe_end_at.isoformat(),
+            "end_at_policy": "db_aware_max_market_ts_minus_24h",
+            "end_at_safety_status": "safe",
+        }
+    requested = parse_iso_datetime(requested_end_at)
+    safety_status = "safe" if requested <= safe_end_at else "unsafe"
+    if safety_status == "unsafe" and not allow_unsafe:
+        raise ValueError(
+            f"manual --end-at is later than safe_end_at: requested={requested.isoformat()} "
+            f"safe={safe_end_at.isoformat()}"
+        )
+    return {
+        "requested_end_at": requested.isoformat(),
+        "resolved_end_at": requested.isoformat(),
+        "safe_end_at": safe_end_at.isoformat(),
+        "end_at_policy": "manual_override",
+        "end_at_safety_status": safety_status,
+    }
+
+
+def query_latest_market_ts(*, exchange: str) -> datetime:
+    settings = load_settings()
+    engine = build_engine(settings)
+    with engine.begin() as connection:
+        latest = connection.execute(
+            text("SELECT max(ts) FROM alt_core.market_1m WHERE exchange = :exchange"),
+            {"exchange": exchange},
+        ).scalar()
+    if latest is None:
+        raise RuntimeError(f"no market_1m rows found for exchange={exchange}")
+    if isinstance(latest, datetime):
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+        return latest.astimezone(timezone.utc)
+    return parse_iso_datetime(str(latest))
 
 
 def git_output(argv: list[str], *, cwd: Path, allow_failure: bool = False) -> str:

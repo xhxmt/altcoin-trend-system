@@ -1,5 +1,5 @@
 import importlib.util
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -439,3 +439,87 @@ def test_collect_environment_contains_required_keys(monkeypatch):
     assert environment["platform"] == "Linux-test"
     assert environment["working_directory"] == "/repo"
     assert "python_version" in environment
+
+
+def test_floor_hour_and_parse_iso_datetime():
+    parsed = _MODULE.parse_iso_datetime("2026-04-25T10:34:22Z")
+
+    assert parsed.isoformat() == "2026-04-25T10:34:22+00:00"
+    assert _MODULE.floor_hour(parsed).isoformat() == "2026-04-25T10:00:00+00:00"
+
+
+def test_resolve_end_at_uses_scoped_market_and_wall_clock_boundaries():
+    now = datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc)
+    latest_market_ts = datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc)
+
+    window = _MODULE.resolve_end_at(
+        requested_end_at=None,
+        latest_market_ts=latest_market_ts,
+        now=now,
+        allow_unsafe=False,
+    )
+
+    assert window["resolved_end_at"] == "2026-04-24T10:00:00+00:00"
+    assert window["safe_end_at"] == "2026-04-24T10:00:00+00:00"
+    assert window["end_at_policy"] == "db_aware_max_market_ts_minus_24h"
+    assert window["end_at_safety_status"] == "safe"
+
+
+def test_resolve_end_at_rejects_unsafe_manual_time_without_override():
+    now = datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc)
+    latest_market_ts = datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="manual --end-at is later than safe_end_at"):
+        _MODULE.resolve_end_at(
+            requested_end_at="2026-04-25T09:00:00Z",
+            latest_market_ts=latest_market_ts,
+            now=now,
+            allow_unsafe=False,
+        )
+
+
+def test_resolve_end_at_allows_unsafe_manual_time_for_diagnostics():
+    now = datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc)
+    latest_market_ts = datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc)
+
+    window = _MODULE.resolve_end_at(
+        requested_end_at="2026-04-25T09:00:00Z",
+        latest_market_ts=latest_market_ts,
+        now=now,
+        allow_unsafe=True,
+    )
+
+    assert window["resolved_end_at"] == "2026-04-25T09:00:00+00:00"
+    assert window["safe_end_at"] == "2026-04-24T10:00:00+00:00"
+    assert window["end_at_policy"] == "manual_override"
+    assert window["end_at_safety_status"] == "unsafe"
+
+
+def test_query_latest_market_ts_normalizes_database_timestamp(monkeypatch):
+    latest = datetime(2026, 4, 25, 10, 55)
+
+    class FakeResult:
+        def scalar(self):
+            return latest
+
+    class FakeConnection:
+        def execute(self, statement, params):
+            assert "SELECT max(ts)" in str(statement)
+            assert params == {"exchange": "binance"}
+            return FakeResult()
+
+    class FakeEngine:
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return FakeConnection()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    settings = object()
+    monkeypatch.setattr(_MODULE, "load_settings", lambda: settings)
+    monkeypatch.setattr(_MODULE, "build_engine", lambda received: FakeEngine())
+
+    assert _MODULE.query_latest_market_ts(exchange="binance") == latest.replace(tzinfo=timezone.utc)

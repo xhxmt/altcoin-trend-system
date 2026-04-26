@@ -296,6 +296,30 @@ def test_archive_dirty_diff_replays_relevant_rename_destination(tmp_path):
     assert not (replay / "scripts" / "foo bar.py").exists()
 
 
+def test_archive_dirty_diff_replays_empty_untracked_file(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _run_git(repo, "add", "README.md")
+    _run_git(repo, "commit", "-m", "initial")
+    empty_path = repo / "docs" / "superpowers" / "plans" / "empty-plan.md"
+    empty_path.parent.mkdir(parents=True)
+    empty_path.write_text("", encoding="utf-8")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    relevant_paths = _MODULE.relevant_dirty_paths(_MODULE.dirty_paths(cwd=repo))
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=relevant_paths)
+    assert result is not None
+    replay = tmp_path / "replay-empty"
+    _run_git(tmp_path, "clone", str(repo), str(replay))
+    _run_git(replay, "apply", str(result))
+
+    replayed_empty_path = replay / "docs" / "superpowers" / "plans" / "empty-plan.md"
+    assert replayed_empty_path.exists()
+    assert replayed_empty_path.read_text(encoding="utf-8") == ""
+
+
 def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path):
     repo = tmp_path / "repo"
     _init_git_repo(repo)

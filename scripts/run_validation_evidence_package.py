@@ -282,7 +282,12 @@ def _archive_untracked_path(*, cwd: Path, path: str) -> str | None:
     except UnicodeDecodeError:
         return None
     if content == "":
-        return f"{header}# content: empty text file\n"
+        return (
+            f"{header}"
+            f"diff --git a/{path} b/{path}\n"
+            "new file mode 100644\n"
+            "index 0000000..e69de29\n"
+        )
     return header + "".join(
         difflib.unified_diff(
             [],

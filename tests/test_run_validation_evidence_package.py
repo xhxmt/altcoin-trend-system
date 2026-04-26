@@ -210,6 +210,18 @@ def test_build_selector_validator_command_passes_exchange_selector_window_and_te
     ]
 
 
+def test_validate_selector_name_accepts_default_selectors():
+    assert [_MODULE.validate_selector_name(selector) for selector in _MODULE.DEFAULT_SELECTORS] == list(
+        _MODULE.DEFAULT_SELECTORS
+    )
+
+
+@pytest.mark.parametrize("selector", ["", "bad/name", r"bad\name", "..", "bad..name", "bad-name"])
+def test_validate_selector_name_rejects_unsafe_components(selector):
+    with pytest.raises(ValueError, match="unsafe selector name"):
+        _MODULE.validate_selector_name(selector)
+
+
 def test_run_selector_validation_moves_single_generated_artifact(tmp_path, monkeypatch):
     def fake_run_command(**kwargs):
         temp_root = Path(kwargs["argv"][-1])
@@ -259,13 +271,38 @@ def test_run_selector_validation_moves_single_generated_artifact(tmp_path, monke
     assert (tmp_path / "selectors" / "ignition_A" / "30d" / "summary.json").is_file()
 
 
+@pytest.mark.parametrize("selector", ["bad/name", "../outside"])
+def test_run_selector_validation_rejects_unsafe_selector_before_running(tmp_path, monkeypatch, selector):
+    outside = tmp_path.parent / "outside"
+
+    def fake_run_command(**kwargs):
+        raise AssertionError("run_command should not be invoked for unsafe selectors")
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    with pytest.raises(ValueError, match="unsafe selector name"):
+        _MODULE.run_selector_validation(
+            selector=selector,
+            exchange="binance",
+            window_days=30,
+            end_at="2026-04-24T10:00:00+00:00",
+            package_dir=tmp_path,
+            cwd=Path.cwd(),
+        )
+
+    assert not (tmp_path / "tmp").exists()
+    assert not (tmp_path / "test_logs").exists()
+    assert not (tmp_path / "selectors").exists()
+    assert not outside.exists()
+
+
 def test_run_selector_validation_raises_when_validator_fails(tmp_path, monkeypatch):
     def fake_run_command(**kwargs):
         return {"name": kwargs["name"], "exit_code": 1, "classification": "failed"}
 
     monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
 
-    with pytest.raises(RuntimeError, match="validator failed for selector=ignition_A"):
+    with pytest.raises(_MODULE.SelectorValidationError, match="validator failed for selector=ignition_A") as exc_info:
         _MODULE.run_selector_validation(
             selector="ignition_A",
             exchange="binance",
@@ -274,6 +311,40 @@ def test_run_selector_validation_raises_when_validator_fails(tmp_path, monkeypat
             package_dir=tmp_path,
             cwd=Path.cwd(),
         )
+
+    assert exc_info.value.selector == "ignition_A"
+    assert exc_info.value.reason == "validator_failed"
+    assert exc_info.value.command["classification"] == "failed"
+    assert exc_info.value.command["exit_code"] == 1
+
+
+def test_run_selector_validation_preserves_command_when_artifact_is_malformed(tmp_path, monkeypatch):
+    def fake_run_command(**kwargs):
+        temp_root = Path(kwargs["argv"][-1])
+        generated = temp_root / "generated-run"
+        generated.mkdir(parents=True)
+        (generated / "summary.json").write_text("{}", encoding="utf-8")
+        (generated / "metadata.json").write_text("{}", encoding="utf-8")
+        (generated / "signals.csv").write_text("symbol\n", encoding="utf-8")
+        (generated / "README.md").write_text("# run\n", encoding="utf-8")
+        return {"name": kwargs["name"], "exit_code": 0, "classification": "passed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    with pytest.raises(_MODULE.SelectorValidationError, match="artifact processing failed") as exc_info:
+        _MODULE.run_selector_validation(
+            selector="ignition_A",
+            exchange="binance",
+            window_days=30,
+            end_at="2026-04-24T10:00:00+00:00",
+            package_dir=tmp_path,
+            cwd=Path.cwd(),
+        )
+
+    assert exc_info.value.selector == "ignition_A"
+    assert exc_info.value.reason == "artifact_processing_failed"
+    assert exc_info.value.command["classification"] == "passed"
+    assert exc_info.value.command["exit_code"] == 0
 
 
 def test_classify_pytest_junit_marks_skipped_as_skipped(tmp_path):

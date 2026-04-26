@@ -6,6 +6,7 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -57,6 +58,7 @@ COUNT_REQUIRED_FIELDS = (
     "primary_label_complete_count",
     "incomplete_label_count",
 )
+SAFE_SELECTOR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,21 @@ class DirtyPathList(list[str]):
         self.rename_pairs = tuple(rename_pairs or [])
 
 
+class SelectorValidationError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        selector: str,
+        command: dict[str, Any] | None,
+        reason: str,
+        message: str,
+    ) -> None:
+        super().__init__(message)
+        self.selector = selector
+        self.command = command
+        self.reason = reason
+
+
 def _iso_now() -> str:
     return utc_now().isoformat()
 
@@ -184,6 +201,7 @@ def build_selector_validator_command(
     end_at: str,
     output_root: Path,
 ) -> list[str]:
+    validate_selector_name(selector)
     return [
         ".venv/bin/python",
         "scripts/validate_ultra_signal_production.py",
@@ -200,6 +218,12 @@ def build_selector_validator_command(
     ]
 
 
+def validate_selector_name(selector: str) -> str:
+    if not SAFE_SELECTOR_NAME_RE.fullmatch(selector):
+        raise ValueError(f"unsafe selector name: {selector!r}")
+    return selector
+
+
 def run_selector_validation(
     *,
     selector: str,
@@ -209,7 +233,8 @@ def run_selector_validation(
     package_dir: Path,
     cwd: Path,
 ) -> dict[str, Any]:
-    temp_root = package_dir / "tmp" / f"selector-{selector}-{uuid.uuid4().hex}"
+    selector_component = validate_selector_name(selector)
+    temp_root = package_dir / "tmp" / f"selector-{selector_component}-{uuid.uuid4().hex}"
     temp_root.mkdir(parents=True, exist_ok=False)
     command = build_selector_validator_command(
         selector=selector,
@@ -219,7 +244,7 @@ def run_selector_validation(
         output_root=temp_root,
     )
     command_record = run_command(
-        name=f"selector_{selector}",
+        name=f"selector_{selector_component}",
         argv=command,
         package_dir=package_dir,
         log_dir=package_dir / "test_logs",
@@ -227,11 +252,24 @@ def run_selector_validation(
         env=None,
     )
     if command_record["classification"] != "passed":
-        raise RuntimeError(f"validator failed for selector={selector}")
-    generated = discover_single_artifact_directory(temp_root)
-    destination = package_dir / "selectors" / selector / "30d"
-    placed = place_artifact_directory(generated, destination)
-    extracted = extract_selector_artifact(selector=selector, artifact_dir=placed)
+        raise SelectorValidationError(
+            selector=selector,
+            command=command_record,
+            reason="validator_failed",
+            message=f"validator failed for selector={selector}",
+        )
+    try:
+        generated = discover_single_artifact_directory(temp_root)
+        destination = package_dir / "selectors" / selector_component / "30d"
+        placed = place_artifact_directory(generated, destination)
+        extracted = extract_selector_artifact(selector=selector, artifact_dir=placed)
+    except Exception as exc:
+        raise SelectorValidationError(
+            selector=selector,
+            command=command_record,
+            reason="artifact_processing_failed",
+            message=f"artifact processing failed for selector={selector}: {exc}",
+        ) from exc
     extracted["command"] = command_record
     return extracted
 

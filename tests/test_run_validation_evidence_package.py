@@ -239,6 +239,25 @@ def test_discover_single_artifact_directory_fails_for_missing_required_file(tmp_
         _MODULE.discover_single_artifact_directory(tmp_path)
 
 
+def test_place_artifact_directory_accepts_positional_args_and_replaces_destination(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "summary.json").write_text('{"source": true}\n', encoding="utf-8")
+    nested = source / "nested"
+    nested.mkdir()
+    (nested / "artifact.txt").write_text("copied\n", encoding="utf-8")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    (destination / "stale.txt").write_text("old\n", encoding="utf-8")
+
+    result = _MODULE.place_artifact_directory(source, destination)
+
+    assert result == destination
+    assert not (destination / "stale.txt").exists()
+    assert (destination / "summary.json").read_text(encoding="utf-8") == '{"source": true}\n'
+    assert (destination / "nested" / "artifact.txt").read_text(encoding="utf-8") == "copied\n"
+
+
 def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
     dirty = [
         "scripts/run_validation_evidence_package.py",

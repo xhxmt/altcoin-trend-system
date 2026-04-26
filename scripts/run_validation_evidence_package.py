@@ -188,7 +188,7 @@ def discover_single_artifact_directory(output_root: Path) -> Path:
     return artifact_dir
 
 
-def place_artifact_directory(*, source: Path, destination: Path) -> Path:
+def place_artifact_directory(source: Path, destination: Path) -> Path:
     if destination.exists():
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)

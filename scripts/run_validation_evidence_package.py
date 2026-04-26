@@ -861,6 +861,152 @@ def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str
     return str(diff_path)
 
 
+def calculate_package_status(
+    *,
+    commands: list[dict[str, Any]],
+    db_smoke: dict[str, Any],
+    selector_artifacts: dict[str, dict[str, Any]],
+    comparison: dict[str, Any],
+    tests_skipped_by_user: bool,
+    end_at_safety_status: str,
+    relevant_dirty_paths: list[str],
+    dirty_diff_path: str | None,
+) -> dict[str, Any]:
+    command_failed = any(command.get("classification") != "passed" for command in commands)
+    smoke_failed = db_smoke.get("classification") != "executed"
+    selector_failed = any(
+        item.get("selector_evidence_status") == "gate_failed" for item in selector_artifacts.values()
+    )
+    unsafe_end = end_at_safety_status != "safe"
+    dirty_blocks_gate = bool(relevant_dirty_paths) and dirty_diff_path is None
+    gate_failed = (
+        command_failed
+        or smoke_failed
+        or selector_failed
+        or tests_skipped_by_user
+        or unsafe_end
+        or dirty_blocks_gate
+    )
+    diagnostic = (
+        comparison.get("comparison_status") == "comparison_not_run"
+        or any(item.get("selector_evidence_status") == "diagnostic_only" for item in selector_artifacts.values())
+        or bool(relevant_dirty_paths)
+        or tests_skipped_by_user
+        or unsafe_end
+    )
+    if gate_failed and (command_failed or smoke_failed or selector_failed or dirty_blocks_gate):
+        overall_status = "failed"
+    elif diagnostic:
+        overall_status = "passed_with_diagnostics"
+    else:
+        overall_status = "passed"
+    comparison_status = comparison.get("comparison_status")
+    threshold_decision_status = "no_decision"
+    if not gate_failed and comparison_status == "evidence_backed" and not diagnostic:
+        threshold_decision_status = "supported"
+    elif comparison_status in {"not_supported", "experimental_only", "insufficient"}:
+        threshold_decision_status = "not_supported"
+    return {
+        "gate_status": "failed" if gate_failed else "passed",
+        "formal_evidence_gate_passed": not gate_failed,
+        "overall_status": overall_status,
+        "threshold_decision_status": threshold_decision_status,
+    }
+
+
+def build_evidence_decision(manifest: dict[str, Any]) -> str:
+    comparison = manifest.get("comparison", {})
+    comparison_status = comparison.get("comparison_status")
+    if manifest.get("formal_evidence_gate_passed") is not True:
+        return "This package is not a formal evidence gate for production threshold decisions."
+    if comparison_status == "comparison_not_run":
+        return (
+            "No threshold change is supported by this package because comparison was not run: "
+            f"{comparison.get('reason')}."
+        )
+    if comparison_status == "evidence_backed" and manifest.get("threshold_decision_status") == "supported":
+        return (
+            f"This package supports retaining candidate threshold change {comparison.get('change_id')} "
+            f"because comparison artifact {comparison.get('comparison_path')} reports evidence_backed "
+            "with trusted 30d evidence and trusted required 90d review."
+        )
+    return (
+        "No threshold change is supported by this package because comparison result is "
+        f"{comparison_status}: {comparison.get('reason')}."
+    )
+
+
+def build_evidence_readme(manifest: dict[str, Any]) -> str:
+    command_lines = [
+        f"- {command.get('name')}: {command.get('classification')} exit={command.get('exit_code')}"
+        for command in manifest.get("commands", [])
+    ]
+    selector_lines = [
+        (
+            f"- {selector}: evidence={data.get('selector_evidence_status')}, "
+            f"coverage={data.get('coverage_status')}, sample={data.get('sample_status')}, "
+            f"primary_label_complete_count={data.get('primary_label_complete_count')}"
+        )
+        for selector, data in sorted(manifest.get("selector_artifacts", {}).items())
+    ]
+    caveats = []
+    if manifest.get("exchange_universe") == ["binance"]:
+        caveats.append("- This package validates binance only; other exchange evidence was not generated in this run.")
+    if manifest.get("relevant_dirty_paths"):
+        caveats.append(
+            "- Relevant dirty paths were present; production-ready threshold claims require human review of the archived diff."
+        )
+    if manifest.get("end_at_safety_status") != "safe":
+        caveats.append("- The requested end_at was unsafe; this package is diagnostic-only.")
+    if not caveats:
+        caveats.append("- No package-level caveats recorded.")
+    lines = [
+        "# Validation Evidence Package",
+        "",
+        "## Gate Summary",
+        "",
+        f"- overall_status: {manifest.get('overall_status')}",
+        f"- gate_status: {manifest.get('gate_status')}",
+        f"- formal_evidence_gate_passed: {manifest.get('formal_evidence_gate_passed')}",
+        f"- threshold_decision_status: {manifest.get('threshold_decision_status')}",
+        "",
+        "## Test Results",
+        "",
+        *command_lines,
+        "",
+        "## DB Smoke",
+        "",
+        f"- classification: {manifest.get('db_smoke', {}).get('classification')}",
+        f"- passed_count: {manifest.get('db_smoke', {}).get('passed_count')}",
+        f"- skipped_count: {manifest.get('db_smoke', {}).get('skipped_count')}",
+        f"- failed_count: {manifest.get('db_smoke', {}).get('failed_count')}",
+        "",
+        "## Window",
+        "",
+        f"- resolved_end_at: {manifest.get('resolved_end_at')}",
+        f"- safe_end_at: {manifest.get('safe_end_at')}",
+        "",
+        "## Selector Artifacts",
+        "",
+        *selector_lines,
+        "",
+        "## Comparison",
+        "",
+        f"- comparison_status: {manifest.get('comparison', {}).get('comparison_status')}",
+        f"- reason: {manifest.get('comparison', {}).get('reason')}",
+        "",
+        "## Evidence Decision",
+        "",
+        build_evidence_decision(manifest),
+        "",
+        "## Caveats",
+        "",
+        *caveats,
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     parse_selector_list(args.selectors)

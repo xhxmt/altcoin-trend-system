@@ -1124,3 +1124,146 @@ def test_query_latest_market_ts_normalizes_database_timestamp(monkeypatch):
     monkeypatch.setattr(_MODULE, "build_engine", lambda received: FakeEngine())
 
     assert _MODULE.query_latest_market_ts(exchange="binance") == latest.replace(tzinfo=timezone.utc)
+
+
+def test_calculate_status_downgrades_missing_comparison_to_diagnostics():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "comparison_not_run"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "passed"
+    assert status["formal_evidence_gate_passed"] is True
+    assert status["overall_status"] == "passed_with_diagnostics"
+    assert status["threshold_decision_status"] == "no_decision"
+
+
+def test_calculate_status_blocks_formal_gate_when_tests_skipped():
+    status = _MODULE.calculate_package_status(
+        commands=[],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "comparison_not_run"},
+        tests_skipped_by_user=True,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "passed_with_diagnostics"
+
+
+def test_calculate_status_fails_when_dirty_diff_is_missing():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "comparison_not_run"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=["scripts/run_validation_evidence_package.py"],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "failed"
+
+
+def test_calculate_status_marks_unsafe_end_at_diagnostic_only():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "comparison_not_run"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="unsafe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "passed_with_diagnostics"
+
+
+def test_calculate_status_supports_threshold_decision_for_clean_evidence_backed_package():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "executed"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "evidence_backed"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "passed"
+    assert status["formal_evidence_gate_passed"] is True
+    assert status["overall_status"] == "passed"
+    assert status["threshold_decision_status"] == "supported"
+
+
+def test_calculate_status_fails_when_db_smoke_is_skipped():
+    status = _MODULE.calculate_package_status(
+        commands=[{"classification": "passed"}],
+        db_smoke={"classification": "skipped"},
+        selector_artifacts={"ignition": {"selector_evidence_status": "evidence_eligible"}},
+        comparison={"comparison_status": "comparison_not_run"},
+        tests_skipped_by_user=False,
+        end_at_safety_status="safe",
+        relevant_dirty_paths=[],
+        dirty_diff_path=None,
+    )
+
+    assert status["gate_status"] == "failed"
+    assert status["formal_evidence_gate_passed"] is False
+    assert status["overall_status"] == "failed"
+
+
+def test_build_evidence_readme_uses_fixed_no_comparison_wording(tmp_path):
+    manifest = {
+        "package_date": "2026-04-25",
+        "run_id": "103422-52e5e9b",
+        "exchange_universe": ["binance"],
+        "resolved_end_at": "2026-04-24T10:00:00+00:00",
+        "safe_end_at": "2026-04-24T10:00:00+00:00",
+        "overall_status": "passed_with_diagnostics",
+        "gate_status": "passed",
+        "formal_evidence_gate_passed": True,
+        "threshold_decision_status": "no_decision",
+        "commands": [{"name": "targeted_tests", "classification": "passed", "exit_code": 0}],
+        "db_smoke": {"classification": "executed", "passed_count": 1, "skipped_count": 0, "failed_count": 0},
+        "selector_artifacts": {
+            "ignition": {
+                "selector_evidence_status": "evidence_eligible",
+                "coverage_status": "trusted",
+                "sample_status": "sample_observed",
+                "primary_label_complete_count": 10,
+            }
+        },
+        "comparison": {
+            "comparison_status": "comparison_not_run",
+            "reason": "missing_traceable_baseline_candidate_config",
+        },
+        "relevant_dirty_paths": [],
+        "end_at_safety_status": "safe",
+    }
+
+    text = _MODULE.build_evidence_readme(manifest)
+
+    assert "## Gate Summary" in text
+    assert "## Evidence Decision" in text
+    assert (
+        "No threshold change is supported by this package because comparison was not run: "
+        "missing_traceable_baseline_candidate_config."
+    ) in text

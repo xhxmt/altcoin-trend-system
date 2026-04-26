@@ -185,6 +185,97 @@ def test_run_command_marks_nonzero_as_failed(tmp_path, monkeypatch):
     assert record["classification"] == "failed"
 
 
+def test_build_selector_validator_command_passes_exchange_selector_window_and_temp_root(tmp_path):
+    command = _MODULE.build_selector_validator_command(
+        selector="ignition_A",
+        exchange="binance",
+        window_days=30,
+        end_at="2026-04-24T10:00:00+00:00",
+        output_root=tmp_path,
+    )
+
+    assert command == [
+        ".venv/bin/python",
+        "scripts/validate_ultra_signal_production.py",
+        "--signal-family",
+        "ignition_A",
+        "--exchange",
+        "binance",
+        "--window-days",
+        "30",
+        "--end-at",
+        "2026-04-24T10:00:00+00:00",
+        "--output-root",
+        str(tmp_path),
+    ]
+
+
+def test_run_selector_validation_moves_single_generated_artifact(tmp_path, monkeypatch):
+    def fake_run_command(**kwargs):
+        temp_root = Path(kwargs["argv"][-1])
+        generated = temp_root / "generated-run"
+        generated.mkdir(parents=True)
+        (generated / "summary.json").write_text(
+            json.dumps(
+                {
+                    "signal_count": 10,
+                    "primary_label_complete_count": 10,
+                    "incomplete_label_count": 0,
+                    "precision_before_dd8": 0.5,
+                    "avg_abs_mae_24h_pct": 5.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (generated / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "coverage_status": "trusted",
+                    "rule_version": "rule-1",
+                    "feature_preparation_version": "feature-1",
+                    "market_1m_timestamp_semantics": "minute_open_utc",
+                    "forward_scan_start_policy": "signal_available_at_inclusive",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (generated / "signals.csv").write_text("symbol\n", encoding="utf-8")
+        (generated / "README.md").write_text("# run\n", encoding="utf-8")
+        return {"name": kwargs["name"], "exit_code": 0, "classification": "passed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    result = _MODULE.run_selector_validation(
+        selector="ignition_A",
+        exchange="binance",
+        window_days=30,
+        end_at="2026-04-24T10:00:00+00:00",
+        package_dir=tmp_path,
+        cwd=Path.cwd(),
+    )
+
+    assert result["selector"] == "ignition_A"
+    assert result["artifact_status"] == "complete"
+    assert (tmp_path / "selectors" / "ignition_A" / "30d" / "summary.json").is_file()
+
+
+def test_run_selector_validation_raises_when_validator_fails(tmp_path, monkeypatch):
+    def fake_run_command(**kwargs):
+        return {"name": kwargs["name"], "exit_code": 1, "classification": "failed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="validator failed for selector=ignition_A"):
+        _MODULE.run_selector_validation(
+            selector="ignition_A",
+            exchange="binance",
+            window_days=30,
+            end_at="2026-04-24T10:00:00+00:00",
+            package_dir=tmp_path,
+            cwd=Path.cwd(),
+        )
+
+
 def test_classify_pytest_junit_marks_skipped_as_skipped(tmp_path):
     junit = tmp_path / "junit.xml"
     junit.write_text(

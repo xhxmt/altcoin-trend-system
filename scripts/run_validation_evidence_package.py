@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -173,6 +174,66 @@ def run_command(
         "junit_xml": str(junit_xml) if junit_xml is not None else None,
         "classification": "passed" if int(completed.returncode) == 0 else "failed",
     }
+
+
+def build_selector_validator_command(
+    *,
+    selector: str,
+    exchange: str,
+    window_days: int,
+    end_at: str,
+    output_root: Path,
+) -> list[str]:
+    return [
+        ".venv/bin/python",
+        "scripts/validate_ultra_signal_production.py",
+        "--signal-family",
+        selector,
+        "--exchange",
+        exchange,
+        "--window-days",
+        str(window_days),
+        "--end-at",
+        end_at,
+        "--output-root",
+        str(output_root),
+    ]
+
+
+def run_selector_validation(
+    *,
+    selector: str,
+    exchange: str,
+    window_days: int,
+    end_at: str,
+    package_dir: Path,
+    cwd: Path,
+) -> dict[str, Any]:
+    temp_root = package_dir / "tmp" / f"selector-{selector}-{uuid.uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=False)
+    command = build_selector_validator_command(
+        selector=selector,
+        exchange=exchange,
+        window_days=window_days,
+        end_at=end_at,
+        output_root=temp_root,
+    )
+    command_record = run_command(
+        name=f"selector_{selector}",
+        argv=command,
+        package_dir=package_dir,
+        log_dir=package_dir / "test_logs",
+        cwd=cwd,
+        env=None,
+    )
+    if command_record["classification"] != "passed":
+        raise RuntimeError(f"validator failed for selector={selector}")
+    generated = discover_single_artifact_directory(temp_root)
+    destination = package_dir / "selectors" / selector / "30d"
+    placed = place_artifact_directory(generated, destination)
+    extracted = extract_selector_artifact(selector=selector, artifact_dir=placed)
+    extracted["command"] = command_record
+    return extracted
 
 
 def classify_pytest_junit(junit_xml: Path) -> dict[str, int | str]:

@@ -393,6 +393,7 @@ def test_build_snapshot_rows_populates_signal_v2_fields_and_keeps_trade_candidat
         "payload"
     ]
     assert rank_payload["ignition_grade"] == "EXTREME"
+    assert rank_payload["reacceleration_grade"] is None
     assert rank_payload["signal_priority"] == 3
     assert "actionability_score" in rank_payload
 

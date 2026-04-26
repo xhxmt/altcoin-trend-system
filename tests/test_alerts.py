@@ -168,6 +168,18 @@ def test_build_signal_v2_alert_message_labels_ultra_high_conviction():
     assert text == "币种：HIGHUSDT\n信号：超高置信\n做多信号强度：88.0/100"
 
 
+def test_build_signal_v2_alert_message_labels_reacceleration():
+    text = build_signal_v2_alert_message(
+        {
+            "symbol": "MOVEUSDT",
+            "actionability_score": 61.0,
+        },
+        "reacceleration_detected",
+    )
+
+    assert text == "币种：MOVEUSDT\n信号：再加速突破\n做多信号强度：61.0/100"
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -435,7 +447,11 @@ def test_build_alert_event_rows_creates_ignition_extreme_event():
     assert events[0]["payload"]["priority"] == "P1"
     assert events[0]["payload"]["continuation_grade"] is None
     assert events[0]["payload"]["ignition_grade"] == "EXTREME"
-    assert events[0]["payload"]["grades"] == {"continuation": None, "ignition": "EXTREME"}
+    assert events[0]["payload"]["grades"] == {
+        "continuation": None,
+        "ignition": "EXTREME",
+        "reacceleration": None,
+    }
     assert events[0]["payload"]["per_exchange_signals"] == {"binance": "IGNITION_EXTREME"}
     assert events[0]["payload"]["asset_ids"] == [21]
     assert events[0]["payload"]["exchanges"] == ["binance"]
@@ -750,6 +766,41 @@ def test_build_alert_event_rows_labels_per_exchange_signals_by_signal_family():
     assert events[0]["payload"]["per_exchange_signals"] == {"binance": "CONTINUATION_A"}
 
 
+def test_build_alert_event_rows_creates_reacceleration_event_with_grade_payload():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rank_row = {
+        "asset_id": 205,
+        "exchange": "binance",
+        "symbol": "MOVEUSDT",
+        "tier": "watchlist",
+        "final_score": 76.0,
+        "trend_score": 72.0,
+        "volume_breakout_score": 55.0,
+        "volume_impulse_score": 58.0,
+        "relative_strength_score": 82.0,
+        "derivatives_score": 30.0,
+        "quality_score": 100.0,
+        "return_1h_pct": 6.0,
+        "return_24h_pct": 44.0,
+        "continuation_grade": None,
+        "ignition_grade": None,
+        "reacceleration_grade": "B",
+        "signal_priority": 1,
+        "risk_flags": [],
+        "chase_risk_score": 10.0,
+        "actionability_score": 63.0,
+        "cross_exchange_confirmed": True,
+        "veto_reason_codes": [],
+    }
+
+    events = build_alert_event_rows([rank_row], recent_events=[], now=now, cooldown_seconds=3600)
+
+    assert len(events) == 1
+    assert events[0]["alert_type"] == "reacceleration_detected"
+    assert events[0]["payload"]["reacceleration_grade"] == "B"
+    assert events[0]["payload"]["per_exchange_signals"] == {"binance": "REACCELERATION_B"}
+
+
 def test_build_alert_event_rows_breaks_best_row_ties_by_priority_then_final_score():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     base = {
@@ -820,7 +871,11 @@ def test_build_alert_event_rows_creates_continuation_confirmed_event_with_priori
     assert events[0]["payload"]["priority"] == priority
     assert events[0]["payload"]["continuation_grade"] == grade
     assert events[0]["payload"]["ignition_grade"] is None
-    assert events[0]["payload"]["grades"] == {"continuation": grade, "ignition": None}
+    assert events[0]["payload"]["grades"] == {
+        "continuation": grade,
+        "ignition": None,
+        "reacceleration": None,
+    }
 
 
 @pytest.mark.parametrize(("grade", "priority"), [("A", "P2"), ("B", "P3")])

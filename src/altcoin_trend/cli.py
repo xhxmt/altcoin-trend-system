@@ -267,6 +267,7 @@ def opportunities(limit: int = typer.Option(30, "--limit", min=1)) -> None:
             f"priority={int(row['signal_priority'])} "
             f"continuation={row.get('continuation_grade') or '-'} "
             f"ignition={row.get('ignition_grade') or '-'} "
+            f"reacceleration={row.get('reacceleration_grade') or '-'} "
             f"chase_risk={float(row['chase_risk_score']):.1f} "
             f"score={float(row['final_score']):.1f}"
         )

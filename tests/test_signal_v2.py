@@ -11,6 +11,7 @@ from altcoin_trend.signals.v2 import (
     ignition_grade,
     is_top_24h,
     is_top_7d,
+    reacceleration_grade,
     signal_priority_for,
     ratio_score,
 )
@@ -117,6 +118,25 @@ def _ultra_row(**overrides):
     return row
 
 
+def _reacceleration_row(**overrides):
+    row = {
+        "return_1h_pct": 6.2,
+        "return_4h_pct": 8.1,
+        "return_24h_pct": 39.5,
+        "return_24h_percentile": 0.91,
+        "return_7d_percentile": 0.94,
+        "return_30d_percentile": 0.89,
+        "volume_ratio_24h": 2.0,
+        "volume_breakout_score": 60.0,
+        "chase_risk_score": 0.0,
+        "quality_score": 100.0,
+        "breakout_20d": True,
+        "veto_reason_codes": [],
+    }
+    row.update(overrides)
+    return row
+
+
 def test_continuation_grade_splits_a_and_b_and_respects_veto():
     assert continuation_grade(_continuation_row()) == "A"
     assert continuation_grade(_continuation_row(derivatives_score=44.9)) == "B"
@@ -185,6 +205,53 @@ def test_ignition_grade_accepts_rank_without_percentile():
     assert ignition_grade(row) == "B"
 
 
+def test_reacceleration_grade_orders_a_before_b_and_avoids_existing_families():
+    assert reacceleration_grade(_reacceleration_row()) == "B"
+    assert reacceleration_grade(
+        _reacceleration_row(
+            return_1h_pct=4.4,
+            return_4h_pct=13.8,
+            return_24h_pct=20.2,
+            return_7d_percentile=0.986,
+            return_30d_percentile=0.89,
+            volume_ratio_24h=3.7,
+            volume_breakout_score=74.7,
+            chase_risk_score=0.0,
+        )
+    ) == "B"
+    assert reacceleration_grade(
+        _reacceleration_row(
+            return_1h_pct=10.0,
+            return_4h_pct=18.0,
+            return_24h_pct=98.5,
+            return_7d_percentile=0.97,
+            return_30d_percentile=0.99,
+            volume_ratio_24h=2.2,
+        )
+    ) == "A"
+    assert reacceleration_grade(_continuation_row(breakout_20d=True)) is None
+    assert reacceleration_grade(_ignition_row(breakout_20d=True, return_24h_percentile=0.93, volume_ratio_24h=3.1)) is None
+
+
+def test_reacceleration_early_volume_branch_requires_clean_breakout_and_not_overheated_path():
+    row = _reacceleration_row(
+        return_1h_pct=4.4,
+        return_4h_pct=13.8,
+        return_24h_pct=20.2,
+        return_24h_percentile=0.78,
+        return_7d_percentile=0.986,
+        return_30d_percentile=0.89,
+        volume_ratio_24h=3.7,
+        volume_breakout_score=74.7,
+        chase_risk_score=0.0,
+    )
+
+    assert reacceleration_grade(row) == "B"
+    assert reacceleration_grade(dict(row, return_24h_percentile=0.74)) is None
+    assert reacceleration_grade(dict(row, volume_breakout_score=69.9)) is None
+    assert reacceleration_grade(dict(row, return_30d_percentile=0.91)) is None
+
+
 def test_chase_risk_and_flags_mark_extreme_crowded_moves():
     row = _ignition_row(
         return_1h_pct=26.0,
@@ -244,9 +311,39 @@ def test_evaluate_signal_v2_returns_complete_result():
 
     assert result.continuation_grade == "A"
     assert result.ignition_grade is None
+    assert result.reacceleration_grade is None
     assert result.ultra_high_conviction is False
     assert result.signal_priority == 3
     assert result.actionability_score > 0.0
+
+
+def test_evaluate_signal_v2_surfaces_reacceleration_grade():
+    result = evaluate_signal_v2(_reacceleration_row())
+
+    assert result.continuation_grade is None
+    assert result.ignition_grade is None
+    assert result.reacceleration_grade == "B"
+    assert result.ultra_high_conviction is False
+    assert result.signal_priority == 1
+
+
+def test_evaluate_signal_v2_computes_chase_risk_before_early_volume_reacceleration_gate():
+    row = _reacceleration_row(
+        return_1h_pct=4.4,
+        return_4h_pct=13.8,
+        return_24h_pct=20.2,
+        return_24h_percentile=0.78,
+        return_7d_percentile=0.986,
+        return_30d_percentile=0.89,
+        volume_ratio_24h=3.7,
+        volume_breakout_score=74.7,
+        chase_risk_score=0.0,
+    )
+    row.pop("chase_risk_score")
+
+    result = evaluate_signal_v2(row)
+
+    assert result.reacceleration_grade == "B"
 
 
 def test_ultra_high_conviction_sets_flag_priority_and_actionability_bonus():

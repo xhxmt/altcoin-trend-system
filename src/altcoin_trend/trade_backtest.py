@@ -46,6 +46,8 @@ def _empty_signal_v2_group_summary() -> dict[str, dict[str, float | int]]:
         "ignition_A": _empty_signal_v2_group_entry(),
         "ignition_B": _empty_signal_v2_group_entry(),
         "ignition_EXTREME": _empty_signal_v2_group_entry(),
+        "reacceleration_A": _empty_signal_v2_group_entry(),
+        "reacceleration_B": _empty_signal_v2_group_entry(),
         "cross_exchange_confirmed": _empty_signal_v2_group_entry(),
         "single_exchange_triggered": _empty_signal_v2_group_entry(),
         "high_chase_risk": _empty_signal_v2_group_entry(),
@@ -311,6 +313,8 @@ def summarize_signal_v2_groups(signals: pd.DataFrame) -> dict[str, dict[str, flo
         "ignition_A": signals["ignition_grade"].fillna("").astype(str).eq("A") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
         "ignition_B": signals["ignition_grade"].fillna("").astype(str).eq("B") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
         "ignition_EXTREME": signals["ignition_grade"].fillna("").astype(str).eq("EXTREME") if "ignition_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "reacceleration_A": signals["reacceleration_grade"].fillna("").astype(str).eq("A") if "reacceleration_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
+        "reacceleration_B": signals["reacceleration_grade"].fillna("").astype(str).eq("B") if "reacceleration_grade" in signals.columns else pd.Series([False] * len(signals), index=signals.index),
     }
     for name, mask in grade_masks.items():
         _populate_group(name, mask)
@@ -387,6 +391,7 @@ def _prepare_feature_frame(bars_1h: pd.DataFrame) -> pd.DataFrame:
     signal_v2 = frame.apply(evaluate_signal_v2, axis=1)
     frame["continuation_grade"] = [result.continuation_grade for result in signal_v2]
     frame["ignition_grade"] = [result.ignition_grade for result in signal_v2]
+    frame["reacceleration_grade"] = [result.reacceleration_grade for result in signal_v2]
     frame["ultra_high_conviction"] = [result.ultra_high_conviction for result in signal_v2]
     frame["signal_priority"] = [result.signal_priority for result in signal_v2]
     frame["chase_risk_score"] = [result.chase_risk_score for result in signal_v2]

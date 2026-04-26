@@ -48,6 +48,7 @@ def _display_alert_type(alert_type: str) -> str:
         "continuation_confirmed": "趋势延续确认",
         "ignition_detected": "点火信号",
         "ignition_extreme": "极端点火",
+        "reacceleration_detected": "再加速突破",
         "ultra_high_conviction": "超高置信",
         "exhaustion_risk": "过热风险",
     }
@@ -173,6 +174,9 @@ def _alert_priority_for_type(alert_type: str, row: Mapping[str, Any] | Any | Non
     if alert_type == "ignition_detected":
         ignition_grade = _get(row, "ignition_grade", None) if row is not None else None
         return "P2" if ignition_grade == "A" else "P3"
+    if alert_type == "reacceleration_detected":
+        reacceleration_grade = _get(row, "reacceleration_grade", None) if row is not None else None
+        return "P2" if reacceleration_grade == "A" else "P3"
     if alert_type == "exhaustion_risk":
         return "P2"
     return "P3"
@@ -189,6 +193,7 @@ def _cooldown_for_priority(priority: str, default_seconds: int) -> int:
 def _v2_alert_type(row: Mapping[str, Any] | Any) -> str | None:
     continuation_grade = _get(row, "continuation_grade", None)
     ignition_grade = _get(row, "ignition_grade", None)
+    reacceleration_grade = _get(row, "reacceleration_grade", None)
     risk_flags = set(_normalize_items(_get(row, "risk_flags", None)))
     try:
         chase_risk_score = float(_get(row, "chase_risk_score", 0.0))
@@ -203,6 +208,8 @@ def _v2_alert_type(row: Mapping[str, Any] | Any) -> str | None:
         return "continuation_confirmed"
     if ignition_grade in {"A", "B"}:
         return "ignition_detected"
+    if reacceleration_grade in {"A", "B"}:
+        return "reacceleration_detected"
     if chase_risk_score >= 80.0 or {"FUNDING_OVERHEAT", "TAKER_CROWDING"} & risk_flags:
         return "exhaustion_risk"
     return None
@@ -213,6 +220,8 @@ def _signal_family(alert_type: str) -> str:
         return "ultra_high_conviction"
     if alert_type in {"ignition_extreme", "ignition_detected"}:
         return "ignition"
+    if alert_type == "reacceleration_detected":
+        return "reacceleration"
     if alert_type == "continuation_confirmed":
         return "continuation"
     return alert_type
@@ -223,7 +232,7 @@ def _alert_type_severity(alert_type: str) -> int:
         return 4
     if alert_type == "ignition_extreme":
         return 3
-    if alert_type in {"continuation_confirmed", "ignition_detected"}:
+    if alert_type in {"continuation_confirmed", "ignition_detected", "reacceleration_detected"}:
         return 2
     if alert_type == "exhaustion_risk":
         return 1
@@ -236,6 +245,9 @@ def _exchange_signal_label(row: Mapping[str, Any] | Any, family: str) -> str:
     if family == "ignition":
         ignition = _get(row, "ignition_grade", None)
         return f"IGNITION_{ignition}" if ignition else "NONE"
+    if family == "reacceleration":
+        reacceleration = _get(row, "reacceleration_grade", None)
+        return f"REACCELERATION_{reacceleration}" if reacceleration else "NONE"
     if family == "continuation":
         continuation = _get(row, "continuation_grade", None)
         return f"CONTINUATION_{continuation}" if continuation else "NONE"
@@ -370,9 +382,11 @@ def build_alert_event_rows(
                                 "grades": {
                                     "continuation": _get(row, "continuation_grade", None),
                                     "ignition": _get(row, "ignition_grade", None),
+                                    "reacceleration": _get(row, "reacceleration_grade", None),
                                 },
                                 "continuation_grade": _get(row, "continuation_grade", None),
                                 "ignition_grade": _get(row, "ignition_grade", None),
+                                "reacceleration_grade": _get(row, "reacceleration_grade", None),
                                 "ultra_high_conviction": bool(_get(row, "ultra_high_conviction", False)),
                                 "signal_priority": _get(row, "signal_priority", None),
                                 "actionability_score": _get(row, "actionability_score", None),

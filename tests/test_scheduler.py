@@ -1049,7 +1049,7 @@ def test_load_opportunity_rows_orders_by_actionability_and_filters_signal_priori
     assert captured["params"] == {"limit": 12}
 
 
-def test_load_explain_row_selects_volume_ratio_1h():
+def test_load_explain_row_selects_reacceleration_explain_fields():
     captured = {}
 
     class Result:
@@ -1081,6 +1081,9 @@ def test_load_explain_row_selects_volume_ratio_1h():
     load_explain_row(Engine(), symbol="solusdt", exchange="binance")
 
     assert "fs.volume_ratio_1h" in captured["sql"]
+    assert "fs.volume_ratio_4h" in captured["sql"]
+    assert "fs.breakout_20d" in captured["sql"]
+    assert "fs.return_30d_percentile" in captured["sql"]
     assert captured["params"] == {"symbol": "SOLUSDT", "exchange": "binance"}
 
 

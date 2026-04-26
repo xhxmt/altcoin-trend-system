@@ -406,6 +406,130 @@ def test_build_comparison_command_rejects_partial_90d_config(tmp_path):
         )
 
 
+def test_run_comparison_config_writes_side_configs_and_result(tmp_path, monkeypatch):
+    for name in (
+        "baseline-summary.json",
+        "baseline-metadata.json",
+        "candidate-summary.json",
+        "candidate-metadata.json",
+    ):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    config = {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {
+            "summary_path": str(tmp_path / "baseline-summary.json"),
+            "metadata_path": str(tmp_path / "baseline-metadata.json"),
+        },
+        "candidate": {
+            "summary_path": str(tmp_path / "candidate-summary.json"),
+            "metadata_path": str(tmp_path / "candidate-metadata.json"),
+        },
+        "ninety_day": None,
+    }
+
+    def fake_run_command(**kwargs):
+        output_root = Path(kwargs["argv"][-1])
+        output_root.mkdir(parents=True, exist_ok=True)
+        result_path = output_root / "result-comparison.json"
+        result_path.write_text(json.dumps({"status": "evidence_backed", "reason": "metrics_pass"}), encoding="utf-8")
+        readme_path = output_root / "result-comparison_README.md"
+        readme_path.write_text("# comparison\n", encoding="utf-8")
+        return {"name": kwargs["name"], "exit_code": 0, "classification": "passed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "evidence_backed"
+    assert result["reason"] == "metrics_pass"
+    assert result["change_id"] == "change-1"
+    assert Path(result["comparison_path"]).is_file()
+
+
+def test_run_comparison_config_persists_stdout_json_when_validator_writes_no_files(tmp_path, monkeypatch):
+    for name in (
+        "baseline-summary.json",
+        "baseline-metadata.json",
+        "candidate-summary.json",
+        "candidate-metadata.json",
+    ):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    config = {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {
+            "summary_path": str(tmp_path / "baseline-summary.json"),
+            "metadata_path": str(tmp_path / "baseline-metadata.json"),
+        },
+        "candidate": {
+            "summary_path": str(tmp_path / "candidate-summary.json"),
+            "metadata_path": str(tmp_path / "candidate-metadata.json"),
+        },
+        "ninety_day": None,
+    }
+
+    def fake_run_command(**kwargs):
+        stdout_log = tmp_path / "comparison.stdout.log"
+        stdout_log.write_text('{"status": "insufficient", "reason": "sample_limited"}\n', encoding="utf-8")
+        return {
+            "name": kwargs["name"],
+            "exit_code": 0,
+            "classification": "passed",
+            "stdout_log": str(stdout_log),
+            "stderr_log": str(tmp_path / "comparison.stderr.log"),
+        }
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "insufficient"
+    assert result["reason"] == "sample_limited"
+    assert json.loads(Path(result["comparison_path"]).read_text(encoding="utf-8"))["status"] == "insufficient"
+    assert Path(result["comparison_readme_path"]).read_text(encoding="utf-8").startswith(
+        "# Signal Validation Comparison"
+    )
+
+
+def test_run_comparison_config_returns_insufficient_when_command_fails(tmp_path, monkeypatch):
+    for name in (
+        "baseline-summary.json",
+        "baseline-metadata.json",
+        "candidate-summary.json",
+        "candidate-metadata.json",
+    ):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    config = {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {
+            "summary_path": str(tmp_path / "baseline-summary.json"),
+            "metadata_path": str(tmp_path / "baseline-metadata.json"),
+        },
+        "candidate": {
+            "summary_path": str(tmp_path / "candidate-summary.json"),
+            "metadata_path": str(tmp_path / "candidate-metadata.json"),
+        },
+        "ninety_day": None,
+    }
+
+    def fake_run_command(**kwargs):
+        return {"name": kwargs["name"], "exit_code": 2, "classification": "failed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "insufficient"
+    assert result["reason"] == "comparison_command_failed"
+    assert result["threshold_decision_status"] == "no_decision"
+    assert result["change_id"] == "change-1"
+
+
 def test_validate_selector_name_accepts_default_selectors():
     assert [_MODULE.validate_selector_name(selector) for selector in _MODULE.DEFAULT_SELECTORS] == list(
         _MODULE.DEFAULT_SELECTORS
@@ -1469,6 +1593,108 @@ def test_run_evidence_package_writes_manifest_and_readme(tmp_path, monkeypatch):
     assert manifest["comparison"]["comparison_status"] == "comparison_not_run"
     assert manifest["dirty_worktree_policy"] == "clean"
     assert (package_dir / "EVIDENCE_PACKAGE.md").is_file()
+
+
+def test_run_evidence_package_integrates_single_comparison_config(tmp_path, monkeypatch):
+    comparison_config = {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {
+            "summary_path": str(tmp_path / "baseline-summary.json"),
+            "metadata_path": str(tmp_path / "baseline-metadata.json"),
+        },
+        "candidate": {
+            "summary_path": str(tmp_path / "candidate-summary.json"),
+            "metadata_path": str(tmp_path / "candidate-metadata.json"),
+        },
+        "ninety_day": None,
+    }
+
+    monkeypatch.setattr(_MODULE, "current_git_sha", lambda cwd: "52e5e9bbc5dd0fc0b3f6738df8bd965e482fb83e")
+    monkeypatch.setattr(_MODULE, "dirty_paths", lambda cwd: [])
+    monkeypatch.setattr(_MODULE, "archive_dirty_diff", lambda cwd, package_dir, paths: None)
+    monkeypatch.setattr(
+        _MODULE,
+        "query_latest_market_ts",
+        lambda exchange: datetime(2026, 4, 25, 10, 55, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(_MODULE, "utc_now", lambda: datetime(2026, 4, 25, 12, 15, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        _MODULE,
+        "run_command",
+        lambda **kwargs: {
+            "name": kwargs["name"],
+            "argv": kwargs["argv"],
+            "started_at": "2026-04-25T10:00:00+00:00",
+            "finished_at": "2026-04-25T10:00:01+00:00",
+            "exit_code": 0,
+            "stdout_log": str(tmp_path / f"{kwargs['name']}.stdout.log"),
+            "stderr_log": str(tmp_path / f"{kwargs['name']}.stderr.log"),
+            "junit_xml": str(kwargs.get("junit_xml")) if kwargs.get("junit_xml") else None,
+            "classification": "passed",
+        },
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "classify_pytest_junit",
+        lambda junit: {"passed_count": 1, "skipped_count": 0, "failed_count": 0, "classification": "executed"},
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "run_selector_validation",
+        lambda **kwargs: {
+            "selector": kwargs["selector"],
+            "artifact_dir": str(tmp_path / kwargs["selector"]),
+            "artifact_status": "complete",
+            "coverage_status": "trusted",
+            "sample_status": "sample_observed",
+            "selector_evidence_status": "evidence_eligible",
+            "primary_label_complete_count": 10,
+            "signal_count": 10,
+            "incomplete_label_count": 0,
+            "precision_before_dd8": 0.5,
+            "avg_abs_mae_24h_pct": 5.0,
+            "rule_version": "rule-1",
+            "feature_preparation_version": "feature-1",
+            "market_1m_timestamp_semantics": "minute_open_utc",
+            "forward_scan_start_policy": "signal_available_at_inclusive",
+        },
+    )
+    monkeypatch.setattr(_MODULE, "load_traceable_comparison_configs", lambda root: [comparison_config])
+    monkeypatch.setattr(
+        _MODULE,
+        "run_comparison_config",
+        lambda **kwargs: {
+            "comparison_status": "evidence_backed",
+            "reason": "metrics_pass",
+            "threshold_decision_status": "supported",
+            "change_id": kwargs["config"]["change_id"],
+            "selector": kwargs["config"]["selector"],
+            "comparison_path": str(tmp_path / "comparison.json"),
+        },
+    )
+
+    exit_code = _MODULE.run_evidence_package(
+        [
+            "--output-root",
+            str(tmp_path / "validation"),
+            "--selectors",
+            "ignition",
+            "--exchange",
+            "binance",
+            "--comparison-root",
+            str(tmp_path / "comparison-configs"),
+        ],
+        cwd=Path.cwd(),
+    )
+
+    package_dir = tmp_path / "validation" / "2026-04-25" / "121500-52e5e9b"
+    manifest = json.loads((package_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert manifest["comparison"]["comparison_status"] == "evidence_backed"
+    assert manifest["comparison"]["change_id"] == "change-1"
+    assert manifest["threshold_decision_status"] == "supported"
 
 
 def test_run_evidence_package_resolves_relative_paths_against_supplied_cwd(tmp_path, monkeypatch):

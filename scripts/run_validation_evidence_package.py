@@ -503,6 +503,139 @@ def comparison_not_run(reason: str) -> dict[str, str]:
     }
 
 
+def write_validator_comparison_side_config(path: Path, side: dict[str, str]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "summary_path": side["summary_path"],
+                "metadata_path": side["metadata_path"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def build_comparison_result_readme(result: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Signal Validation Comparison",
+            "",
+            f"- status: {result.get('status')}",
+            f"- reason: {result.get('reason')}",
+            "",
+        ]
+    )
+
+
+def _comparison_json_from_stdout(stdout_log: Path) -> dict[str, Any]:
+    for line in stdout_log.read_text(encoding="utf-8").splitlines():
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and "status" in parsed:
+            return parsed
+    raise RuntimeError(f"comparison stdout did not contain a JSON result: {stdout_log}")
+
+
+def discover_comparison_result(
+    output_root: Path,
+    *,
+    stdout_log: Path | None,
+    comparison_dir: Path,
+) -> tuple[Path, Path | None]:
+    comparison_paths = sorted(output_root.glob("*-comparison.json"))
+    if len(comparison_paths) > 1:
+        raise RuntimeError(f"expected at most one comparison json under {output_root}, found {len(comparison_paths)}")
+    if len(comparison_paths) == 1:
+        comparison_path = comparison_paths[0]
+        readme_path = comparison_path.with_name(comparison_path.stem + "_README.md")
+        return comparison_path, readme_path if readme_path.is_file() else None
+    if stdout_log is None:
+        raise RuntimeError(f"expected comparison json under {output_root} or stdout JSON fallback")
+    result = _comparison_json_from_stdout(stdout_log)
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = comparison_dir / "comparison.json"
+    readme_path = comparison_dir / "comparison_README.md"
+    comparison_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    readme_path.write_text(build_comparison_result_readme(result), encoding="utf-8")
+    return comparison_path, readme_path
+
+
+def run_comparison_config(*, config: dict[str, Any], package_dir: Path, cwd: Path) -> dict[str, Any]:
+    selector = str(config["selector"])
+    comparison_dir = package_dir / "comparisons" / selector
+    generated_config_dir = comparison_dir / "configs"
+    output_root = comparison_dir / "output"
+    baseline_config = write_validator_comparison_side_config(
+        generated_config_dir / "baseline.json",
+        config["baseline"],
+    )
+    candidate_config = write_validator_comparison_side_config(
+        generated_config_dir / "candidate.json",
+        config["candidate"],
+    )
+    baseline_90d_config = None
+    candidate_90d_config = None
+    ninety_day = config.get("ninety_day")
+    if isinstance(ninety_day, dict) and ninety_day.get("required"):
+        baseline_90d_config = write_validator_comparison_side_config(
+            generated_config_dir / "baseline_90d.json",
+            ninety_day["baseline"],
+        )
+        candidate_90d_config = write_validator_comparison_side_config(
+            generated_config_dir / "candidate_90d.json",
+            ninety_day["candidate"],
+        )
+    command = build_comparison_command(
+        baseline_config=baseline_config,
+        candidate_config=candidate_config,
+        baseline_90d_config=baseline_90d_config,
+        candidate_90d_config=candidate_90d_config,
+        change_classification=str(config["change_classification"]),
+        output_root=output_root,
+    )
+    record = run_command(
+        name=f"comparison_{selector}",
+        argv=command,
+        package_dir=package_dir,
+        log_dir=comparison_dir,
+        cwd=cwd,
+        env=None,
+    )
+    if record["classification"] != "passed":
+        return {
+            "comparison_status": "insufficient",
+            "reason": "comparison_command_failed",
+            "threshold_decision_status": "no_decision",
+            "command": record,
+            "change_id": config.get("change_id"),
+        }
+    comparison_path, readme_path = discover_comparison_result(
+        output_root,
+        stdout_log=Path(str(record.get("stdout_log"))) if record.get("stdout_log") else None,
+        comparison_dir=comparison_dir,
+    )
+    result = read_json_object(comparison_path)
+    status = str(result.get("status", "insufficient"))
+    threshold_decision_status = "supported" if status == "evidence_backed" else "not_supported"
+    return {
+        "comparison_status": status,
+        "reason": str(result.get("reason", "")),
+        "threshold_decision_status": threshold_decision_status,
+        "comparison_path": str(comparison_path),
+        "comparison_readme_path": str(readme_path) if readme_path is not None else None,
+        "change_id": config.get("change_id"),
+        "selector": selector,
+        "command": record,
+    }
+
+
 def numeric_value(value: Any, *, field: str) -> int | float:
     if isinstance(value, bool) or value is None:
         raise ValueError(f"invalid numeric required field {field}: {value!r}")
@@ -1212,11 +1345,14 @@ def run_evidence_package(argv: list[str] | None = None, *, cwd: Path | None = No
         configs = load_traceable_comparison_configs(comparison_root)
         if not configs:
             manifest["comparison"] = comparison_not_run("missing_traceable_baseline_candidate_config")
+        elif len(configs) == 1:
+            manifest["comparison"] = run_comparison_config(config=configs[0], package_dir=package_dir, cwd=cwd)
         else:
             manifest["comparison"] = {
                 "comparison_status": "insufficient",
-                "reason": "comparison_config_present_before_comparison_support",
+                "reason": "multiple_traceable_comparison_configs_not_supported_in_p0",
                 "threshold_decision_status": "no_decision",
+                "config_count": len(configs),
             }
         manifest.update(
             calculate_package_status(

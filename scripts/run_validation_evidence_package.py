@@ -599,6 +599,111 @@ def discover_comparison_result(
     return comparison_path, readme_path
 
 
+def _require_comparison_int(result: dict[str, Any], field: str) -> int:
+    value = result.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"evidence_backed comparison result field {field} must be a non-negative integer")
+    return value
+
+
+def _require_comparison_number(result: dict[str, Any], field: str, *, non_negative: bool = False) -> int | float:
+    value = numeric_value(result.get(field), field=field)
+    if non_negative and value < 0:
+        raise ValueError(f"evidence_backed comparison result field {field} must be non-negative")
+    return value
+
+
+def _require_comparison_rate(result: dict[str, Any], field: str) -> int | float:
+    value = _require_comparison_number(result, field)
+    if value < 0 or value > 1:
+        raise ValueError(f"evidence_backed comparison result field {field} must be in [0, 1]")
+    return value
+
+
+def _require_comparison_bool(result: dict[str, Any], field: str, *, must_be_true: bool = False) -> bool:
+    value = result.get(field)
+    if not isinstance(value, bool):
+        raise ValueError(f"evidence_backed comparison result field {field} must be a boolean")
+    if must_be_true and value is not True:
+        raise ValueError(f"evidence_backed comparison result field {field} must be true")
+    return value
+
+
+def _require_comparison_string(result: dict[str, Any], field: str) -> str:
+    value = result.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"evidence_backed comparison result field {field} must be a non-empty string")
+    return value
+
+
+def _require_comparison_timestamp(result: dict[str, Any], field: str) -> datetime:
+    value = _require_comparison_string(result, field)
+    try:
+        return parse_iso_datetime(value)
+    except ValueError as exc:
+        raise ValueError(f"evidence_backed comparison result field {field} must be an ISO datetime") from exc
+
+
+def _validate_evidence_backed_comparison_fields(result: dict[str, Any]) -> None:
+    missing = [field for field in EVIDENCE_BACKED_REQUIRED_COMPARISON_FIELDS if field not in result]
+    if missing:
+        raise ValueError(f"evidence_backed comparison result missing required fields: {missing}")
+
+    _require_comparison_timestamp(result, "comparison_window_start")
+    _require_comparison_timestamp(result, "comparison_window_end")
+    for field in (
+        "baseline_primary_label_complete_count",
+        "candidate_primary_label_complete_count",
+    ):
+        _require_comparison_int(result, field)
+    for field in (
+        "baseline_precision_before_dd8",
+        "candidate_precision_before_dd8",
+    ):
+        _require_comparison_rate(result, field)
+    for field in (
+        "baseline_avg_abs_mae_24h_pct",
+        "candidate_avg_abs_mae_24h_pct",
+    ):
+        _require_comparison_number(result, field, non_negative=True)
+    for field in (
+        "baseline_avg_mae_24h_pct",
+        "candidate_avg_mae_24h_pct",
+    ):
+        _require_comparison_number(result, field)
+    _require_comparison_string(result, "mae_path_risk_policy")
+    _require_comparison_bool(result, "path_risk_pass", must_be_true=True)
+    requires_90d = _require_comparison_bool(result, "requires_90d")
+
+    if not requires_90d:
+        return
+
+    missing_90d = [field for field in EVIDENCE_BACKED_REQUIRED_90D_COMPARISON_FIELDS if field not in result]
+    if missing_90d:
+        raise ValueError(f"evidence_backed 90d comparison result missing required fields: {missing_90d}")
+    for field in (
+        "baseline_90d_primary_label_complete_count",
+        "candidate_90d_primary_label_complete_count",
+    ):
+        _require_comparison_int(result, field)
+    for field in (
+        "baseline_90d_precision_before_dd8",
+        "candidate_90d_precision_before_dd8",
+    ):
+        _require_comparison_rate(result, field)
+    for field in (
+        "baseline_90d_avg_abs_mae_24h_pct",
+        "candidate_90d_avg_abs_mae_24h_pct",
+    ):
+        _require_comparison_number(result, field, non_negative=True)
+    for field in (
+        "baseline_90d_avg_mae_24h_pct",
+        "candidate_90d_avg_mae_24h_pct",
+    ):
+        _require_comparison_number(result, field)
+    _require_comparison_bool(result, "metrics_pass_90d", must_be_true=True)
+
+
 def validate_comparison_result(result: dict[str, Any], *, comparison_path: Path) -> dict[str, Any]:
     status = result.get("status")
     reason = result.get("reason")
@@ -609,15 +714,7 @@ def validate_comparison_result(result: dict[str, Any], *, comparison_path: Path)
     if status == "evidence_backed":
         if not comparison_path.is_file():
             raise ValueError("comparison result path is missing")
-        missing = [field for field in EVIDENCE_BACKED_REQUIRED_COMPARISON_FIELDS if field not in result]
-        if missing:
-            raise ValueError(f"evidence_backed comparison result missing required fields: {missing}")
-        if result.get("requires_90d") is True:
-            missing_90d = [field for field in EVIDENCE_BACKED_REQUIRED_90D_COMPARISON_FIELDS if field not in result]
-            if missing_90d:
-                raise ValueError(f"evidence_backed 90d comparison result missing required fields: {missing_90d}")
-            if result.get("metrics_pass_90d") is not True:
-                raise ValueError("evidence_backed 90d comparison result did not pass 90d metrics")
+        _validate_evidence_backed_comparison_fields(result)
     return result
 
 

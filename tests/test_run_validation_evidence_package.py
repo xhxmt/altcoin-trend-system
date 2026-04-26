@@ -122,6 +122,41 @@ def _valid_comparison_result(**overrides: object) -> dict[str, object]:
     return result
 
 
+def _basic_run_comparison_config(tmp_path: Path) -> dict[str, object]:
+    for name in (
+        "baseline-summary.json",
+        "baseline-metadata.json",
+        "candidate-summary.json",
+        "candidate-metadata.json",
+    ):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    return {
+        "selector": "ultra_high_conviction",
+        "change_id": "change-1",
+        "change_classification": "non_material",
+        "baseline": {
+            "summary_path": str(tmp_path / "baseline-summary.json"),
+            "metadata_path": str(tmp_path / "baseline-metadata.json"),
+        },
+        "candidate": {
+            "summary_path": str(tmp_path / "candidate-summary.json"),
+            "metadata_path": str(tmp_path / "candidate-metadata.json"),
+        },
+        "ninety_day": None,
+    }
+
+
+def _stub_comparison_result(monkeypatch: pytest.MonkeyPatch, comparison_result: dict[str, object]) -> None:
+    def fake_run_command(**kwargs):
+        output_root = Path(kwargs["argv"][-1])
+        output_root.mkdir(parents=True, exist_ok=True)
+        result_path = output_root / "result-comparison.json"
+        result_path.write_text(json.dumps(comparison_result), encoding="utf-8")
+        return {"name": kwargs["name"], "exit_code": 0, "classification": "passed"}
+
+    monkeypatch.setattr(_MODULE, "run_command", fake_run_command)
+
+
 def test_default_selectors_include_aggregate_and_grade_views():
     assert _MODULE.DEFAULT_SELECTORS == (
         "continuation",
@@ -512,6 +547,67 @@ def test_run_comparison_config_downgrades_bare_evidence_backed_result(tmp_path, 
     assert result["change_id"] == "change-1"
     assert result["selector"] == "ultra_high_conviction"
     assert result["command"]["classification"] == "passed"
+
+
+def test_run_comparison_config_downgrades_malformed_typed_evidence_backed_fields(tmp_path, monkeypatch):
+    config = _basic_run_comparison_config(tmp_path)
+    _stub_comparison_result(
+        monkeypatch,
+        _valid_comparison_result(
+            baseline_primary_label_complete_count="50",
+            candidate_primary_label_complete_count=-1,
+            baseline_precision_before_dd8=1.2,
+            candidate_precision_before_dd8=float("nan"),
+            baseline_avg_abs_mae_24h_pct=-0.1,
+            candidate_avg_abs_mae_24h_pct="4.8",
+            path_risk_pass="true",
+        ),
+    )
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "insufficient"
+    assert result["reason"] == "malformed_comparison_result"
+    assert result["threshold_decision_status"] == "no_decision"
+    assert result["command"]["name"] == "comparison_ultra_high_conviction"
+    assert result["command"]["classification"] == "passed"
+
+
+def test_run_comparison_config_downgrades_string_requires_90d(tmp_path, monkeypatch):
+    config = _basic_run_comparison_config(tmp_path)
+    _stub_comparison_result(monkeypatch, _valid_comparison_result(requires_90d="true"))
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "insufficient"
+    assert result["reason"] == "malformed_comparison_result"
+    assert result["threshold_decision_status"] == "no_decision"
+    assert result["command"]["name"] == "comparison_ultra_high_conviction"
+
+
+def test_run_comparison_config_accepts_valid_evidence_backed_90d_fields(tmp_path, monkeypatch):
+    config = _basic_run_comparison_config(tmp_path)
+    _stub_comparison_result(
+        monkeypatch,
+        _valid_comparison_result(
+            requires_90d=True,
+            baseline_90d_primary_label_complete_count=140,
+            candidate_90d_primary_label_complete_count=142,
+            baseline_90d_precision_before_dd8=0.41,
+            candidate_90d_precision_before_dd8=0.46,
+            baseline_90d_avg_abs_mae_24h_pct=5.1,
+            candidate_90d_avg_abs_mae_24h_pct=4.7,
+            baseline_90d_avg_mae_24h_pct=-1.1,
+            candidate_90d_avg_mae_24h_pct=-0.7,
+            metrics_pass_90d=True,
+        ),
+    )
+
+    result = _MODULE.run_comparison_config(config=config, package_dir=tmp_path, cwd=Path.cwd())
+
+    assert result["comparison_status"] == "evidence_backed"
+    assert result["threshold_decision_status"] == "supported"
+    assert result["reason"] == "metrics_pass"
 
 
 @pytest.mark.parametrize(

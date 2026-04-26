@@ -3,6 +3,7 @@
 import argparse
 import difflib
 import json
+import math
 import os
 import platform
 import shutil
@@ -49,6 +50,11 @@ SUMMARY_REQUIRED_FIELDS = (
     "incomplete_label_count",
     "precision_before_dd8",
     "avg_abs_mae_24h_pct",
+)
+COUNT_REQUIRED_FIELDS = (
+    "signal_count",
+    "primary_label_complete_count",
+    "incomplete_label_count",
 )
 
 
@@ -234,6 +240,52 @@ def numeric_value(value: Any, *, field: str) -> int | float:
     raise ValueError(f"invalid numeric required field {field}: {value!r}")
 
 
+def count_value(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid count required field {field}: {value!r}")
+    return value
+
+
+def finite_number_value(value: Any, *, field: str) -> int | float:
+    numeric = numeric_value(value, field=field)
+    if not math.isfinite(float(numeric)):
+        raise ValueError(f"invalid {field}: {value!r}")
+    return numeric
+
+
+def precision_value(value: Any, *, field: str) -> int | float:
+    numeric = finite_number_value(value, field=field)
+    if numeric < 0 or numeric > 1:
+        raise ValueError(f"invalid {field}: {value!r}")
+    return numeric
+
+
+def non_negative_metric_value(value: Any, *, field: str) -> int | float:
+    numeric = finite_number_value(value, field=field)
+    if numeric < 0:
+        raise ValueError(f"invalid {field}: {value!r}")
+    return numeric
+
+
+def validate_selector_counts(
+    *,
+    signal_count: int,
+    primary_label_complete_count: int,
+    incomplete_label_count: int,
+) -> None:
+    if (
+        primary_label_complete_count > signal_count
+        or incomplete_label_count > signal_count
+        or primary_label_complete_count + incomplete_label_count > signal_count
+    ):
+        raise ValueError(
+            "inconsistent selector counts: "
+            f"signal_count={signal_count}, "
+            f"primary_label_complete_count={primary_label_complete_count}, "
+            f"incomplete_label_count={incomplete_label_count}"
+        )
+
+
 def sample_status(primary_label_complete_count: int) -> str:
     if primary_label_complete_count == 0:
         return "no_signals"
@@ -256,11 +308,16 @@ def extract_selector_artifact(*, selector: str, artifact_dir: Path) -> dict[str,
         raise ValueError(f"selector {selector} missing required artifact files: {missing_files}")
     metadata = read_json_object(artifact_dir / "metadata.json")
     summary = read_json_object(artifact_dir / "summary.json")
+    field_conflicts = [
+        field
+        for field in (*METADATA_REQUIRED_FIELDS, *SUMMARY_REQUIRED_FIELDS)
+        if field in metadata and field in summary and metadata[field] != summary[field]
+    ]
     extracted: dict[str, Any] = {
         "selector": selector,
         "artifact_dir": str(artifact_dir),
         "artifact_status": "complete",
-        "field_conflicts": [],
+        "field_conflicts": field_conflicts,
     }
     for field in METADATA_REQUIRED_FIELDS:
         if field not in metadata:
@@ -269,10 +326,22 @@ def extract_selector_artifact(*, selector: str, artifact_dir: Path) -> dict[str,
     for field in SUMMARY_REQUIRED_FIELDS:
         if field not in summary:
             raise ValueError(f"missing required selector field {field} in summary.json for {selector}")
-        extracted[field] = numeric_value(summary[field], field=field)
-        if field in metadata and metadata[field] != summary[field]:
-            extracted["field_conflicts"].append(field)
-    primary_count = int(extracted["primary_label_complete_count"])
+        if field in COUNT_REQUIRED_FIELDS:
+            extracted[field] = count_value(summary[field], field=field)
+        elif field == "precision_before_dd8":
+            extracted[field] = precision_value(summary[field], field=field)
+        elif field == "avg_abs_mae_24h_pct":
+            extracted[field] = non_negative_metric_value(summary[field], field=field)
+        else:
+            extracted[field] = numeric_value(summary[field], field=field)
+    signal_count = extracted["signal_count"]
+    primary_count = extracted["primary_label_complete_count"]
+    incomplete_count = extracted["incomplete_label_count"]
+    validate_selector_counts(
+        signal_count=signal_count,
+        primary_label_complete_count=primary_count,
+        incomplete_label_count=incomplete_count,
+    )
     extracted["sample_status"] = sample_status(primary_count)
     extracted["selector_evidence_status"] = selector_evidence_status(
         artifact_status=str(extracted["artifact_status"]),

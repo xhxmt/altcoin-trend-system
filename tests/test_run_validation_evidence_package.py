@@ -33,6 +33,35 @@ def _init_git_repo(path: Path) -> None:
     _run_git(path, "config", "commit.gpgsign", "false")
 
 
+def _write_selector_artifact(
+    artifact: Path,
+    *,
+    metadata_overrides: dict[str, object] | None = None,
+    summary_overrides: dict[str, object] | None = None,
+) -> None:
+    artifact.mkdir()
+    metadata: dict[str, object] = {
+        "coverage_status": "trusted",
+        "rule_version": "rule-1",
+        "feature_preparation_version": "feature-1",
+        "market_1m_timestamp_semantics": "minute_open_utc",
+        "forward_scan_start_policy": "signal_available_at_inclusive",
+    }
+    summary: dict[str, object] = {
+        "signal_count": 12,
+        "primary_label_complete_count": 10,
+        "incomplete_label_count": 2,
+        "precision_before_dd8": 0.5,
+        "avg_abs_mae_24h_pct": 6.0,
+    }
+    metadata.update(metadata_overrides or {})
+    summary.update(summary_overrides or {})
+    (artifact / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (artifact / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (artifact / "signals.csv").write_text("symbol\n", encoding="utf-8")
+    (artifact / "README.md").write_text("# run\n", encoding="utf-8")
+
+
 def test_default_selectors_include_aggregate_and_grade_views():
     assert _MODULE.DEFAULT_SELECTORS == (
         "continuation",
@@ -362,6 +391,37 @@ def test_extract_selector_artifact_fails_for_missing_required_field(tmp_path):
 
     with pytest.raises(ValueError, match="missing required selector field"):
         _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
+
+
+@pytest.mark.parametrize(
+    ("summary_overrides", "message"),
+    [
+        ({"signal_count": 12.5}, "invalid count required field"),
+        ({"primary_label_complete_count": 10.0}, "invalid count required field"),
+        ({"incomplete_label_count": -1}, "invalid count required field"),
+        ({"precision_before_dd8": 1.5}, "invalid precision_before_dd8"),
+        ({"avg_abs_mae_24h_pct": -0.1}, "invalid avg_abs_mae_24h_pct"),
+        ({"primary_label_complete_count": 13}, "inconsistent selector counts"),
+        ({"incomplete_label_count": 13}, "inconsistent selector counts"),
+        ({"primary_label_complete_count": 8, "incomplete_label_count": 5}, "inconsistent selector counts"),
+    ],
+)
+def test_extract_selector_artifact_rejects_invalid_numeric_domains(tmp_path, summary_overrides, message):
+    artifact = tmp_path / "selector"
+    _write_selector_artifact(artifact, summary_overrides=summary_overrides)
+
+    with pytest.raises(ValueError, match=message):
+        _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
+
+
+def test_extract_selector_artifact_records_metadata_canonical_conflict(tmp_path):
+    artifact = tmp_path / "selector"
+    _write_selector_artifact(artifact, summary_overrides={"coverage_status": "material_gaps"})
+
+    extracted = _MODULE.extract_selector_artifact(selector="ignition", artifact_dir=artifact)
+
+    assert extracted["coverage_status"] == "trusted"
+    assert "coverage_status" in extracted["field_conflicts"]
 
 
 def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():

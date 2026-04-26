@@ -282,11 +282,59 @@ def test_sync_market_inputs_reuses_fetched_instruments(monkeypatch):
     monkeypatch.setattr("altcoin_trend.daemon.sync_exchange_market_data", fake_market_sync)
     monkeypatch.setattr("altcoin_trend.daemon.sync_exchange_derivatives", fake_derivative_sync)
 
-    result = daemon.sync_market_inputs(engine=object(), settings=settings, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    result = daemon.sync_market_inputs(
+        engine=object(),
+        settings=settings,
+        now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
 
     assert fetch_calls == ["fetch"]
     assert seen_instruments == [("market", [instrument]), ("derivatives", [instrument])]
     assert result.message == "instruments_selected=1 bars_written=2 derivatives_updated=3"
+
+
+def test_sync_market_inputs_reports_market_failures(monkeypatch):
+    settings = AppSettings(default_exchanges="binance", symbol_allowlist="SOLUSDT")
+    instrument = Instrument(
+        exchange="binance",
+        market_type="usdt_perp",
+        symbol="SOLUSDT",
+        base_asset="SOL",
+        quote_asset="USDT",
+        status="trading",
+        onboard_at=None,
+        contract_type="PERPETUAL",
+        tick_size=0.01,
+        step_size=0.1,
+        min_notional=5.0,
+    )
+
+    class Adapter:
+        exchange = "binance"
+
+        def fetch_instruments(self):
+            return [instrument]
+
+    monkeypatch.setattr("altcoin_trend.daemon._adapter_for_exchange", lambda exchange: Adapter())
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.sync_exchange_market_data",
+        lambda *, adapter, engine, settings, now, instruments: SimpleNamespace(
+            bars_written=2,
+            instruments_selected=1,
+            failed_symbols=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "altcoin_trend.daemon.sync_exchange_derivatives",
+        lambda *, adapter, engine, settings, now, instruments: SimpleNamespace(
+            updates_written=3,
+            instruments_selected=1,
+        ),
+    )
+
+    result = daemon.sync_market_inputs(engine=object(), settings=settings, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert result.message == "instruments_selected=1 bars_written=2 derivatives_updated=3 market_failures=1"
 
 
 def test_sync_market_inputs_reuses_cached_instruments_across_calls(monkeypatch):

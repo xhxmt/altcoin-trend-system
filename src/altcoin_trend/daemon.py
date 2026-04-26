@@ -80,6 +80,7 @@ def sync_market_inputs(
     bars_written = 0
     derivatives_updated = 0
     instruments_selected = 0
+    market_failures = 0
     for exchange in settings.exchanges:
         adapter = _adapter_for_exchange(exchange)
         if instrument_cache is None:
@@ -101,15 +102,19 @@ def sync_market_inputs(
             instruments=instruments,
         )
         bars_written += market_result.bars_written
+        market_failures += getattr(market_result, "failed_symbols", 0)
         derivatives_updated += derivative_result.updates_written
         instruments_selected += market_result.instruments_selected
 
+    message = (
+        f"instruments_selected={instruments_selected} "
+        f"bars_written={bars_written} derivatives_updated={derivatives_updated}"
+    )
+    if market_failures:
+        message += f" market_failures={market_failures}"
     return InputSyncResult(
         status="healthy",
-        message=(
-            f"instruments_selected={instruments_selected} "
-            f"bars_written={bars_written} derivatives_updated={derivatives_updated}"
-        ),
+        message=message,
     )
 
 

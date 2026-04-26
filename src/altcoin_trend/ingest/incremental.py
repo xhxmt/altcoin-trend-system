@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 
 from sqlalchemy import text
 
@@ -13,11 +14,15 @@ from altcoin_trend.ingest.normalize import market_bar_to_row
 from altcoin_trend.models import Instrument
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class MarketSyncResult:
     exchange: str
     instruments_selected: int
     bars_written: int
+    failed_symbols: int = 0
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,7 @@ def sync_exchange_market_data(
     asset_ids_by_symbol = upsert_instruments(engine, selected_instruments)
     latest_by_asset = _latest_market_timestamps(engine, [int(asset_id) for asset_id in asset_ids_by_symbol.values()])
     bars_written = 0
+    failed_symbols = 0
 
     for instrument in selected_instruments:
         asset_id = int(asset_ids_by_symbol[instrument.symbol])
@@ -106,7 +112,19 @@ def sync_exchange_market_data(
         if start >= current_time:
             continue
 
-        bars = adapter.fetch_klines_1m(instrument.symbol, _to_epoch_ms(start), _to_epoch_ms(current_time))
+        try:
+            bars = adapter.fetch_klines_1m(instrument.symbol, _to_epoch_ms(start), _to_epoch_ms(current_time))
+        except Exception:
+            failed_symbols += 1
+            logger.warning(
+                "Market data fetch failed exchange=%s symbol=%s start=%s end=%s",
+                adapter.exchange,
+                instrument.symbol,
+                start.isoformat(),
+                current_time.isoformat(),
+                exc_info=True,
+            )
+            continue
         rows = [market_bar_to_row(asset_id, bar) for bar in bars if bar.is_closed]
         bars_written += insert_market_rows_ignore_conflicts(engine, rows)
 
@@ -114,6 +132,7 @@ def sync_exchange_market_data(
         exchange=adapter.exchange,
         instruments_selected=len(selected_instruments),
         bars_written=bars_written,
+        failed_symbols=failed_symbols,
     )
 
 

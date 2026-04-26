@@ -116,6 +116,40 @@ def test_sync_exchange_market_data_uses_fallback_when_asset_has_no_history(monke
     ]
 
 
+def test_sync_exchange_market_data_continues_after_symbol_fetch_failure(monkeypatch):
+    class PartiallyFailingAdapter(FakeAdapter):
+        def fetch_klines_1m(self, symbol: str, start_ms: int, end_ms: int):
+            self.fetch_calls.append((symbol, start_ms, end_ms))
+            if symbol == "SOLUSDT":
+                raise RuntimeError("rate limited")
+            return super().fetch_klines_1m(symbol, start_ms, end_ms)
+
+    adapter = PartiallyFailingAdapter()
+    inserted = []
+
+    monkeypatch.setattr(incremental, "upsert_instruments", lambda engine, instruments: {"SOLUSDT": 7, "ETHUSDT": 8})
+    monkeypatch.setattr(incremental, "_latest_market_timestamps", lambda engine, asset_ids: {})
+
+    def fake_insert_market_rows_ignore_conflicts(engine, rows):
+        inserted.extend(rows)
+        return len(rows)
+
+    monkeypatch.setattr(incremental, "insert_market_rows_ignore_conflicts", fake_insert_market_rows_ignore_conflicts)
+
+    result = incremental.sync_exchange_market_data(
+        adapter=adapter,
+        engine=object(),
+        settings=AppSettings(symbol_allowlist=""),
+        now=NOW,
+        fallback_lookback_minutes=30,
+    )
+
+    assert result.instruments_selected == 2
+    assert result.failed_symbols == 1
+    assert result.bars_written == 1
+    assert [row["symbol"] for row in inserted] == ["ETHUSDT"]
+
+
 def test_sync_exchange_derivatives_skips_assets_with_recent_derivative_data(monkeypatch):
     adapter = FakeAdapter()
 

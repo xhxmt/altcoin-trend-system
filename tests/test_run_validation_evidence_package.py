@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -79,3 +80,89 @@ def test_resolve_package_dir_allows_existing_with_overwrite(tmp_path):
     )
 
     assert resolved == existing
+
+
+def test_run_command_writes_stdout_stderr_and_returns_record(tmp_path, monkeypatch):
+    class FakeCompleted:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = "warn\n"
+
+    def fake_run(args, cwd, env, text, capture_output, check):
+        assert args == ["pytest", "-q"]
+        assert cwd == Path.cwd()
+        assert env["EXAMPLE"] == "1"
+        assert text is True
+        assert capture_output is True
+        assert check is False
+        return FakeCompleted()
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", fake_run)
+
+    record = _MODULE.run_command(
+        name="targeted_tests",
+        argv=["pytest", "-q"],
+        package_dir=tmp_path,
+        log_dir=tmp_path / "test_logs",
+        cwd=Path.cwd(),
+        env={"EXAMPLE": "1"},
+    )
+
+    assert record["name"] == "targeted_tests"
+    assert record["exit_code"] == 0
+    assert record["classification"] == "passed"
+    assert Path(record["stdout_log"]).read_text(encoding="utf-8") == "ok\n"
+    assert Path(record["stderr_log"]).read_text(encoding="utf-8") == "warn\n"
+
+
+def test_run_command_marks_nonzero_as_failed(tmp_path, monkeypatch):
+    class FakeCompleted:
+        returncode = 2
+        stdout = ""
+        stderr = "failed\n"
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    record = _MODULE.run_command(
+        name="impacted_tests",
+        argv=["pytest", "-q"],
+        package_dir=tmp_path,
+        log_dir=tmp_path / "test_logs",
+        cwd=Path.cwd(),
+        env=None,
+    )
+
+    assert record["exit_code"] == 2
+    assert record["classification"] == "failed"
+
+
+def test_relevant_dirty_paths_are_limited_to_validation_relevant_areas():
+    dirty = [
+        "scripts/run_validation_evidence_package.py",
+        "src/altcoin_trend/signals/v2.py",
+        "tests/test_signal_v2.py",
+        "docs/superpowers/specs/2026-04-25-validation-evidence-package-design.md",
+        "README.md",
+    ]
+
+    assert _MODULE.relevant_dirty_paths(dirty) == [
+        "scripts/run_validation_evidence_package.py",
+        "src/altcoin_trend/signals/v2.py",
+        "tests/test_signal_v2.py",
+        "docs/superpowers/specs/2026-04-25-validation-evidence-package-design.md",
+    ]
+
+
+def test_dirty_worktree_policy_disables_threshold_claims_for_relevant_paths():
+    assert _MODULE.dirty_worktree_policy([]) == "clean"
+    assert _MODULE.dirty_worktree_policy(["scripts/run_validation_evidence_package.py"]) == "threshold_claims_disabled"
+
+
+def test_collect_environment_contains_required_keys(monkeypatch):
+    monkeypatch.setattr(_MODULE.platform, "platform", lambda: "Linux-test")
+
+    environment = _MODULE.collect_environment(cwd=Path("/repo"))
+
+    assert environment["platform"] == "Linux-test"
+    assert environment["working_directory"] == "/repo"
+    assert "python_version" in environment

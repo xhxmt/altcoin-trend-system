@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
+import os
+import platform
+import subprocess
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +84,131 @@ def resolve_package_dir(
     if package_dir.exists() and not overwrite:
         raise FileExistsError(f"evidence package already exists: {package_dir}")
     return package_dir
+
+
+RELEVANT_DIRTY_PREFIXES = (
+    "scripts/",
+    "src/altcoin_trend/",
+    "tests/",
+    "docs/superpowers/specs/",
+    "docs/superpowers/plans/",
+)
+
+
+def _iso_now() -> str:
+    return utc_now().isoformat()
+
+
+def run_command(
+    *,
+    name: str,
+    argv: list[str],
+    package_dir: Path,
+    log_dir: Path,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+    junit_xml: Path | None = None,
+) -> dict[str, Any]:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_log = log_dir / f"{name}.stdout.log"
+    stderr_log = log_dir / f"{name}.stderr.log"
+    started_at = _iso_now()
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(dict(env))
+    completed = subprocess.run(
+        argv,
+        cwd=cwd,
+        env=merged_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    finished_at = _iso_now()
+    stdout_log.write_text(completed.stdout or "", encoding="utf-8")
+    stderr_log.write_text(completed.stderr or "", encoding="utf-8")
+    return {
+        "name": name,
+        "argv": list(argv),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "exit_code": int(completed.returncode),
+        "stdout_log": str(stdout_log),
+        "stderr_log": str(stderr_log),
+        "junit_xml": str(junit_xml) if junit_xml is not None else None,
+        "classification": "passed" if int(completed.returncode) == 0 else "failed",
+    }
+
+
+def relevant_dirty_paths(paths: list[str]) -> list[str]:
+    return [path for path in paths if path.startswith(RELEVANT_DIRTY_PREFIXES)]
+
+
+def dirty_worktree_policy(relevant_paths: list[str]) -> str:
+    return "threshold_claims_disabled" if relevant_paths else "clean"
+
+
+def collect_environment(*, cwd: Path) -> dict[str, str]:
+    environment = {
+        "python_version": sys.version.split()[0],
+        "platform": platform.platform(),
+        "working_directory": str(cwd),
+    }
+    for module_name in ("pandas", "sqlalchemy", "pytest"):
+        try:
+            module = __import__(module_name)
+        except Exception:
+            environment[f"{module_name}_version"] = "unavailable"
+        else:
+            environment[f"{module_name}_version"] = str(getattr(module, "__version__", "unknown"))
+    return environment
+
+
+def git_output(argv: list[str], *, cwd: Path) -> str:
+    completed = subprocess.run(
+        argv,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def current_git_sha(*, cwd: Path) -> str:
+    return git_output(["git", "rev-parse", "HEAD"], cwd=cwd) or "unknown"
+
+
+def dirty_paths(*, cwd: Path) -> list[str]:
+    output = git_output(["git", "status", "--short"], cwd=cwd)
+    paths: list[str] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path)
+    return paths
+
+
+def archive_dirty_diff(*, cwd: Path, package_dir: Path, paths: list[str]) -> str | None:
+    if not paths:
+        return None
+    completed = subprocess.run(
+        ["git", "diff", "--", *paths],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    diff_path = package_dir / "dirty_diff.patch"
+    diff_path.write_text(completed.stdout, encoding="utf-8")
+    return str(diff_path)
 
 
 def main(argv: list[str] | None = None) -> int:

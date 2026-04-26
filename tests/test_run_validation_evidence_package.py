@@ -219,9 +219,24 @@ def test_dirty_paths_parses_normal_rename_and_untracked_paths(monkeypatch):
 
     assert _MODULE.dirty_paths(cwd=Path.cwd()) == [
         "scripts/run_validation_evidence_package.py",
+        "docs/old-plan.md",
         "docs/superpowers/plans/new-plan.md",
         "tests/test_new_validation.py",
     ]
+
+
+def test_dirty_paths_preserves_relevant_source_path_for_rename(monkeypatch):
+    class FakeCompleted:
+        returncode = 0
+        stdout = "R  scripts/foo.py -> README.md\n"
+        stderr = ""
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    paths = _MODULE.dirty_paths(cwd=Path.cwd())
+
+    assert paths == ["scripts/foo.py", "README.md"]
+    assert _MODULE.relevant_dirty_paths(paths) == ["scripts/foo.py"]
 
 
 def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path):
@@ -257,6 +272,42 @@ def test_archive_dirty_diff_captures_unstaged_staged_and_untracked_text(tmp_path
     assert "+unstaged change\n" in patch_text
     assert "# Untracked file: docs/superpowers/plans/2026-04-25-validation-evidence-package.md" in patch_text
     assert "+plan text\n" in patch_text
+
+
+def test_archive_dirty_diff_captures_staged_binary_patch(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    binary_path = repo / "scripts" / "fixture.bin"
+    binary_path.parent.mkdir()
+    binary_path.write_bytes(b"\x00base-binary\n")
+    _run_git(repo, "add", "scripts/fixture.bin")
+    _run_git(repo, "commit", "-m", "initial")
+
+    binary_path.write_bytes(b"\x00changed-binary\n")
+    _run_git(repo, "add", "scripts/fixture.bin")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=["scripts/fixture.bin"])
+
+    assert result is not None
+    patch_text = Path(result).read_text(encoding="utf-8")
+    assert "GIT binary patch" in patch_text
+
+
+def test_archive_dirty_diff_returns_none_for_untracked_binary_only(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    binary_path = repo / "scripts" / "untracked.bin"
+    binary_path.parent.mkdir()
+    binary_path.write_bytes(b"\x00\xffbinary\n")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    result = _MODULE.archive_dirty_diff(cwd=repo, package_dir=package_dir, paths=["scripts/untracked.bin"])
+
+    assert result is None
+    assert not (package_dir / "dirty_diff.patch").exists()
 
 
 def test_archive_dirty_diff_returns_none_for_empty_archive(tmp_path):

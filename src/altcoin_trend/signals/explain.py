@@ -1,6 +1,7 @@
 from __future__ import annotations
-
 from collections.abc import Mapping
+from collections.abc import Sequence
+
 from typing import Any
 
 
@@ -19,23 +20,59 @@ def _format_optional_float(value: Any) -> str:
         return "n/a"
 
 
+def _format_optional_int(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _format_grade(value: Any) -> str:
+    if value is None:
+        return "-"
+    text = str(value).strip()
+    return text if text else "-"
+
+
+def _format_bool(value: Any) -> str:
+    return "yes" if bool(value) else "no"
+
+
+def _normalize_items(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        normalized = value.strip()
+        return (normalized,) if normalized else ()
+    if isinstance(value, Sequence):
+        return tuple(str(item).strip() for item in value if item is not None and str(item).strip())
+    normalized = str(value).strip()
+    return (normalized,) if normalized else ()
+
+
 def build_explain_text(row: Mapping[str, Any] | Any) -> str:
     exchange = _get(row, "exchange", "unknown")
     symbol = row["symbol"] if isinstance(row, Mapping) else getattr(row, "symbol")
     final_score = _get(row, "final_score", 0.0)
     tier = _get(row, "tier", "rejected")
-    raw_veto = _get(row, "veto_reason_codes", ())
-    if raw_veto is None:
-        veto = ()
-    elif isinstance(raw_veto, str):
-        veto = (raw_veto,)
-    else:
-        veto = tuple(raw_veto)
+    veto = _normalize_items(_get(row, "veto_reason_codes", ()))
+    risk_flags = _normalize_items(_get(row, "risk_flags", ()))
 
     lines = [
         f"{exchange}:{symbol}",
         f"Score: {final_score}",
         f"Tier: {tier}",
+        "Signal v2:",
+        f"Priority: {_format_optional_int(_get(row, 'signal_priority', None))}",
+        f"Continuation: {_format_grade(_get(row, 'continuation_grade', None))}",
+        f"Ignition: {_format_grade(_get(row, 'ignition_grade', None))}",
+        f"Reacceleration: {_format_grade(_get(row, 'reacceleration_grade', None))}",
+        f"Ultra high conviction: {_format_bool(_get(row, 'ultra_high_conviction', False))}",
+        f"Actionability: {_format_optional_float(_get(row, 'actionability_score', None))}",
+        f"Chase risk: {_format_optional_float(_get(row, 'chase_risk_score', None))}",
+        f"Risk flags: {', '.join(risk_flags) if risk_flags else 'none'}",
         "Breakdown:",
         f"Trend: {_get(row, 'trend_score', 'n/a')}",
         f"Volume breakout: {_get(row, 'volume_breakout_score', 'n/a')}",

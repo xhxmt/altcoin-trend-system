@@ -2365,3 +2365,62 @@ def test_validate_prepared_features_end_to_end_for_all_families():
     assert outputs["ignition"]["signal_count"] == 1
     assert outputs["reacceleration"]["signal_count"] == 1
     assert outputs["ultra_high_conviction"]["signal_count"] == 1
+
+
+def test_evaluate_prepared_feature_frame_preserves_signal_identity_and_branch_inputs():
+    features = pd.DataFrame(
+        [
+            {
+                "asset_id": 5,
+                "exchange": "binance",
+                "symbol": "REACCUSDT",
+                "ts": pd.Timestamp("2026-04-22T10:00:00Z"),
+                "close": 100.0,
+                "return_1h_pct": 4.0,
+                "return_4h_pct": 12.0,
+                "return_24h_pct": 24.0,
+                "return_7d_pct": 55.0,
+                "return_30d_pct": 40.0,
+                "volume_ratio_24h": 3.2,
+                "volume_breakout_score": 92.0,
+                "return_24h_percentile": 0.82,
+                "return_7d_percentile": 0.91,
+                "return_30d_percentile": 0.86,
+                "quality_score": 90.0,
+                "chase_risk_score": 10.0,
+                "risk_flags": (),
+                "breakout_20d": True,
+                "continuation_grade": None,
+                "ignition_grade": None,
+                "reacceleration_grade": "B",
+                "ultra_high_conviction": False,
+            }
+        ]
+    )
+    future_rows_by_asset_id = {
+        5: pd.DataFrame(
+            [
+                {
+                    "ts": pd.Timestamp("2026-04-22T11:00:00Z") + pd.Timedelta(minutes=minute),
+                    "open": 100.0,
+                    "high": 112.0,
+                    "low": 99.0,
+                }
+                for minute in range(60)
+            ]
+        )
+    }
+
+    _, rows = _MODULE.evaluate_prepared_feature_frame(
+        features,
+        future_rows_by_asset_id=future_rows_by_asset_id,
+        exchange="binance",
+        start=pd.Timestamp("2026-04-22T10:00:00Z").to_pydatetime(),
+        end=pd.Timestamp("2026-04-22T11:00:00Z").to_pydatetime(),
+        signal_family="reacceleration",
+    )
+
+    assert rows[0]["signal_family"] == "reacceleration"
+    assert rows[0]["signal_grade"] == "B"
+    assert rows[0]["signal_selector"] == "reacceleration"
+    assert rows[0]["breakout_20d"] is True

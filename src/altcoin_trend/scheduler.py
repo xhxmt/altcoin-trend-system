@@ -841,7 +841,7 @@ def load_opportunity_rows(engine: Engine, limit: int = 30) -> list[dict[str, Any
         return [dict(row) for row in result.mappings().all()]
 
 
-def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, Any] | None:
+def load_explain_row(engine: Engine, symbol: str, exchange: str, at: datetime | None = None) -> dict[str, Any] | None:
     statement = text(
         """
         SELECT
@@ -904,12 +904,13 @@ def load_explain_row(engine: Engine, symbol: str, exchange: str) -> dict[str, An
          AND r.rank_scope = :exchange
         WHERE fs.symbol = :symbol
           AND fs.exchange = :exchange
+          AND (:at IS NULL OR fs.ts <= :at)
         ORDER BY fs.ts DESC
         LIMIT 1
         """
     )
     with engine.begin() as connection:
-        result = connection.execute(statement, {"symbol": symbol.upper(), "exchange": exchange})
+        result = connection.execute(statement, {"symbol": symbol.upper(), "exchange": exchange, "at": at})
         row = result.mappings().first()
         return dict(row) if row is not None else None
 

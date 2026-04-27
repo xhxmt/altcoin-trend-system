@@ -394,10 +394,15 @@ def backtest(
 
 
 @app.command("explain")
-def explain(symbol: str, exchange: str = typer.Option(..., "--exchange")) -> None:
+def explain(
+    symbol: str,
+    exchange: str = typer.Option(..., "--exchange"),
+    at: str | None = typer.Option(None, "--at"),
+) -> None:
     settings = load_settings()
     engine = build_engine(settings)
-    row = load_explain_row(engine, symbol=symbol, exchange=exchange)
+    snapshot_at = _parse_iso_datetime(at) if at is not None else None
+    row = load_explain_row(engine, symbol=symbol, exchange=exchange, at=snapshot_at)
     if row is None:
         typer.echo(f"{exchange}:{symbol.upper()}")
         typer.echo("Score: unavailable until feature snapshots exist")

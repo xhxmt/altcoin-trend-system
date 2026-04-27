@@ -106,14 +106,45 @@ def test_evaluate_signals_v2_command_prints_group_summary(monkeypatch):
 
 
 def test_cli_explain_uses_requested_exchange_and_symbol(monkeypatch):
+    captured = {}
     monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
-    monkeypatch.setattr("altcoin_trend.cli.load_explain_row", lambda engine, symbol, exchange: None)
+
+    def fake_load_explain_row(engine, symbol, exchange, at=None):
+        captured["symbol"] = symbol
+        captured["exchange"] = exchange
+        captured["at"] = at
+        return None
+
+    monkeypatch.setattr("altcoin_trend.cli.load_explain_row", fake_load_explain_row)
 
     result = CliRunner().invoke(app, ["explain", "solusdt", "--exchange", "binance"])
 
     assert result.exit_code == 0
     assert "binance:SOLUSDT" in result.output
+    assert captured["symbol"] == "solusdt"
+    assert captured["exchange"] == "binance"
+    assert captured["at"] is None
+
+
+def test_cli_explain_accepts_historical_snapshot_time(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("altcoin_trend.cli.load_settings", lambda: AppSettings())
+    monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
+
+    def fake_load_explain_row(engine, symbol, exchange, at=None):
+        captured["at"] = at
+        return None
+
+    monkeypatch.setattr("altcoin_trend.cli.load_explain_row", fake_load_explain_row)
+
+    result = CliRunner().invoke(
+        app,
+        ["explain", "solusdt", "--exchange", "binance", "--at", "2026-04-26T19:59:46Z"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["at"] == datetime(2026, 4, 26, 19, 59, 46, tzinfo=timezone.utc)
 
 
 def test_cli_explain_prints_snapshot_when_available(monkeypatch):
@@ -121,7 +152,7 @@ def test_cli_explain_prints_snapshot_when_available(monkeypatch):
     monkeypatch.setattr("altcoin_trend.cli.build_engine", lambda settings: object())
     monkeypatch.setattr(
         "altcoin_trend.cli.load_explain_row",
-        lambda engine, symbol, exchange: {
+        lambda engine, symbol, exchange, at=None: {
             "exchange": exchange,
             "symbol": symbol.upper(),
             "final_score": 88.4,

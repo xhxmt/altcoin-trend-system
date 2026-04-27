@@ -1084,7 +1084,7 @@ def test_load_explain_row_selects_reacceleration_explain_fields():
     assert "fs.volume_ratio_4h" in captured["sql"]
     assert "fs.breakout_20d" in captured["sql"]
     assert "fs.return_30d_percentile" in captured["sql"]
-    assert captured["params"] == {"symbol": "SOLUSDT", "exchange": "binance"}
+    assert captured["params"] == {"symbol": "SOLUSDT", "exchange": "binance", "at": None}
 
 
 def test_process_alerts_inserts_and_sends_new_alert(monkeypatch):
